@@ -1,0 +1,93 @@
+{
+  "id": "sentinel",
+  "name": "Sentinel",
+  "description": "Real-time endpoint security monitoring for macOS — process execution, SSH connections, privilege escalation, and file integrity alerts via OpenClaw.",
+  "version": "0.1.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "osqueryPath": {
+        "type": "string",
+        "description": "Path to osqueryd binary"
+      },
+      "configPath": {
+        "type": "string",
+        "description": "Path to osquery config file"
+      },
+      "alertChannel": {
+        "type": "string",
+        "description": "Channel to send alerts (signal, slack, telegram, etc.)"
+      },
+      "alertTo": {
+        "type": "string",
+        "description": "Target for alerts (phone number, channel id, etc.)"
+      },
+      "logPath": {
+        "type": "string",
+        "description": "Path to store sentinel event logs"
+      },
+      "pollIntervalMs": {
+        "type": "number",
+        "minimum": 5000,
+        "maximum": 300000,
+        "description": "How often to poll osquery results (ms)"
+      },
+      "enableProcessMonitor": {
+        "type": "boolean",
+        "description": "Monitor process execution events"
+      },
+      "enableFileIntegrity": {
+        "type": "boolean",
+        "description": "Monitor file integrity events"
+      },
+      "enableNetworkMonitor": {
+        "type": "boolean",
+        "description": "Monitor network connections and listening ports"
+      },
+      "trustedSigningIds": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Signing IDs to trust (skip alerts for these)"
+      },
+      "trustedPaths": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Process paths to trust (skip alerts for these)"
+      },
+      "watchPaths": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "File paths to monitor for integrity changes"
+      }
+    }
+  },
+  "uiHints": {
+    "osqueryPath": {
+      "label": "osquery Path",
+      "placeholder": "/opt/homebrew/bin/osqueryd",
+      "help": "Path to the osqueryd binary. Install via: brew install osquery"
+    },
+    "alertChannel": {
+      "label": "Alert Channel",
+      "placeholder": "signal",
+      "help": "Which messaging channel to send security alerts to"
+    },
+    "alertTo": {
+      "label": "Alert Target",
+      "placeholder": "+14085551234",
+      "help": "Phone number, channel ID, or user ID for alerts",
+      "sensitive": true
+    },
+    "logPath": {
+      "label": "Log Directory",
+      "placeholder": "~/.openclaw/sentinel/logs",
+      "advanced": true
+    },
+    "trustedSigningIds": {
+      "label": "Trusted Signing IDs",
+      "help": "Apple signing IDs to exclude from alerts (e.g., com.apple.* processes)",
+      "advanced": true
+    }
+  }
+}
