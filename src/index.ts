@@ -22,6 +22,7 @@ import { Type } from "@sinclair/typebox";
 import type { SentinelConfig, SecurityEvent } from "./config.js";
 import { findOsquery, query } from "./osquery.js";
 import { shouldAlert, meetsThreshold, createAlertState } from "./alerts.js";
+import { EventStore } from "./persistence.js";
 import { ResultLogWatcher } from "./watcher.js";
 import type { OsqueryResultBatch } from "./watcher.js";
 import {
@@ -46,12 +47,17 @@ const state = {
 const MAX_EVENT_LOG = 1000;
 const SENTINEL_DIR_DEFAULT = join(homedir(), ".openclaw", "sentinel");
 const alertRateState = createAlertState();
+let eventStore: EventStore | null = null;
 
 function logEvent(evt: SecurityEvent): void {
   state.eventLog.push(evt);
   if (state.eventLog.length > MAX_EVENT_LOG) {
     state.eventLog = state.eventLog.slice(-MAX_EVENT_LOG);
   }
+  // Persist to disk
+  eventStore?.append(evt).catch((err) => {
+    console.error("[sentinel] Failed to persist event:", err);
+  });
 }
 
 /**
@@ -323,6 +329,14 @@ export default function sentinel(api: any): void {
       }
 
       console.log(`[sentinel] Starting in event-driven mode...`);
+
+      // 0. Initialize event store and load persisted events
+      eventStore = new EventStore(sentinelDir);
+      const persisted = await eventStore.loadRecent(MAX_EVENT_LOG);
+      if (persisted.length > 0) {
+        state.eventLog = persisted;
+        console.log(`[sentinel] Restored ${persisted.length} events from disk`);
+      }
 
       // 1. Initialize baseline
       await initializeBaseline(osqueryiPath);
