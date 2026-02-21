@@ -1,46 +1,59 @@
 # 🛡️ OpenClaw Sentinel
 
-Real-time endpoint security monitoring plugin for [OpenClaw](https://github.com/openclaw/openclaw).
+Real-time endpoint security monitoring plugin for [OpenClaw](https://github.com/openclaw/openclaw). Uses [osquery](https://osquery.io) to detect threats and alerts you via Signal, Slack, or any configured channel.
 
-Sentinel uses [osquery](https://osquery.io) to monitor your macOS endpoints for security events and alerts you in real-time via your configured OpenClaw channel (Signal, Slack, Telegram, etc.).
+## What it does
 
-## What it monitors
+Sentinel watches your machine for suspicious activity and alerts you in real-time:
 
-| Category | What | Severity |
-|----------|------|----------|
-| **Process** | Unsigned binary execution | 🔴 High |
-| **Process** | Suspicious command patterns (reverse shells, curl\|sh, etc.) | 🔴 High |
-| **Privilege** | Privilege escalation (uid≠0 running as euid=0) | 🔴 High |
-| **Auth** | SSH login from unknown host | 🔴 High |
-| **File** | Critical system file modification (/etc/sudoers, /etc/hosts) | 🚨 Critical |
-| **File** | Launch daemon/agent changes (persistence mechanisms) | 🔴 High |
-| **Network** | New listening port opened | 🟡 Medium |
+- **🔍 Process monitoring** — unsigned binaries, privilege escalation, suspicious commands
+- **🔐 SSH monitoring** — logins from unknown hosts, brute force attempts
+- **🌐 Network monitoring** — new listening ports, unexpected services
+- **📁 File integrity** — changes to critical system files, new persistence mechanisms (LaunchDaemons, cron)
+- **🚨 Smart alerting** — learns your baseline (known hosts, ports) and only alerts on anomalies
+
+## Architecture
+
+```
+osqueryd (root daemon)
+    ↓ writes JSON results
+~/.openclaw/sentinel/logs/osquery/osqueryd.results.log
+    ↓ tailed by
+Sentinel watcher (fs.watch + poll fallback)
+    ↓ parsed results
+Analyzer (detection rules)
+    ↓ high/critical events
+OpenClaw → Signal/Slack/Telegram alert
+```
+
+Sentinel **does not** run osqueryd itself (it requires root). You start osqueryd separately via `sudo` or `launchd`, and Sentinel tails its result logs.
 
 ## Prerequisites
 
+- macOS (Apple Silicon or Intel)
+- [osquery](https://osquery.io) installed
+- [OpenClaw](https://github.com/openclaw/openclaw) running
+
+### Install osquery
+
 ```bash
-brew install osquery
+# Download the official .pkg from https://osquery.io/downloads
+# Or if you have it already:
+which osqueryi  # Should return a path
 ```
 
-osquery must have **Full Disk Access** for Endpoint Security framework monitoring:
-System Settings → Privacy & Security → Full Disk Access → add `/opt/homebrew/bin/osqueryd`
+> **Note:** osquery needs **Full Disk Access** permission on macOS to use the Endpoint Security framework. Grant it to `/opt/osquery/lib/osquery.app/Contents/MacOS/osqueryd` in System Settings → Privacy & Security → Full Disk Access.
 
 ## Installation
 
 ```bash
-openclaw plugins install @openclaw/sentinel
-```
-
-Or for local development:
-```bash
-cd openclaw-sentinel
-npm install && npm run build
-# Add to openclaw.json plugins.entries
+openclaw plugins install /path/to/openclaw-sentinel
+openclaw gateway restart
 ```
 
 ## Configuration
 
-Add to your `openclaw.json`:
+Add to your `~/.openclaw/openclaw.json` under `plugins.entries`:
 
 ```json
 {
@@ -49,24 +62,11 @@ Add to your `openclaw.json`:
       "sentinel": {
         "enabled": true,
         "config": {
+          "osqueryPath": "/opt/osquery/lib/osquery.app/Contents/MacOS/osqueryi",
+          "logPath": "~/.openclaw/sentinel",
           "alertChannel": "signal",
-          "alertTo": "+14085551234",
-          "pollIntervalMs": 30000,
-          "enableProcessMonitor": true,
-          "enableFileIntegrity": true,
-          "enableNetworkMonitor": true,
-          "trustedSigningIds": [
-            "com.apple.",
-            "com.google.Chrome",
-            "com.microsoft."
-          ],
-          "trustedPaths": [
-            "/usr/bin/",
-            "/usr/sbin/",
-            "/bin/",
-            "/sbin/",
-            "/System/"
-          ]
+          "alertTo": "+1234567890",
+          "alertSeverity": "high"
         }
       }
     }
@@ -74,56 +74,161 @@ Add to your `openclaw.json`:
 }
 ```
 
-## Agent Tools
+### Config options
 
-Sentinel registers three tools available to your OpenClaw agent:
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `osqueryPath` | string | auto-detect | Path to `osqueryi` binary |
+| `logPath` | string | `~/.openclaw/sentinel` | Directory for sentinel data and osquery logs |
+| `alertChannel` | string | — | Channel for alerts (`signal`, `slack`, `telegram`, etc.) |
+| `alertTo` | string | — | Alert target (phone number, channel ID, etc.) |
+| `alertSeverity` | string | `high` | Minimum severity to alert: `critical`, `high`, `medium`, `low`, `info` |
+| `trustedSigningIds` | string[] | `[]` | Code signing IDs to skip (e.g. `com.apple`) |
+| `trustedPaths` | string[] | `[]` | Binary paths to skip (e.g. `/usr/bin`, `/opt/homebrew/bin`) |
+| `watchPaths` | string[] | `[]` | File paths to monitor for integrity changes |
+| `enableProcessMonitor` | boolean | `true` | Monitor process execution events |
+| `enableFileIntegrity` | boolean | `true` | Monitor file integrity events |
+| `enableNetworkMonitor` | boolean | `true` | Monitor network connections |
+| `pollIntervalMs` | number | `30000` | Fallback poll interval (ms) if fs.watch misses events |
+
+## Starting osqueryd
+
+Sentinel watches osqueryd's output — you need to start osqueryd separately:
+
+### Manual start
+
+```bash
+SENTINEL_DIR=~/.openclaw/sentinel
+
+# Generate config (Sentinel creates this on first load)
+# Then start the daemon:
+sudo osqueryd \
+  --config_path=$SENTINEL_DIR/config/osquery.conf \
+  --database_path=$SENTINEL_DIR/db \
+  --logger_path=$SENTINEL_DIR/logs/osquery \
+  --pidfile=$SENTINEL_DIR/osqueryd.pid \
+  --logger_plugin=filesystem \
+  --disable_events=false \
+  --events_expiry=3600 \
+  --daemonize \
+  --force
+```
+
+### Via launchd (recommended for always-on monitoring)
+
+Create `/Library/LaunchDaemons/com.openclaw.osqueryd.plist`:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.openclaw.osqueryd</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/opt/osquery/lib/osquery.app/Contents/MacOS/osqueryd</string>
+        <string>--config_path=/Users/YOU/.openclaw/sentinel/config/osquery.conf</string>
+        <string>--database_path=/Users/YOU/.openclaw/sentinel/db</string>
+        <string>--logger_path=/Users/YOU/.openclaw/sentinel/logs/osquery</string>
+        <string>--pidfile=/Users/YOU/.openclaw/sentinel/osqueryd.pid</string>
+        <string>--logger_plugin=filesystem</string>
+        <string>--disable_events=false</string>
+        <string>--events_expiry=3600</string>
+        <string>--force</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+</dict>
+</plist>
+```
+
+```bash
+sudo launchctl load /Library/LaunchDaemons/com.openclaw.osqueryd.plist
+```
+
+## Agent tools
+
+Sentinel registers three tools your OpenClaw agent can use:
 
 ### `sentinel_status`
-Get current monitoring status — active state, known hosts/ports, event counts.
+
+Get monitoring status — daemon state, event counts, known baseline.
 
 ### `sentinel_query`
-Run ad-hoc osquery SQL queries for security investigation.
+
+Run ad-hoc osquery SQL for security investigation:
+
 ```
-"Show me all processes listening on external ports"
-→ sentinel_query: SELECT lp.port, p.name, p.path FROM listening_ports lp JOIN processes p ON lp.pid = p.pid WHERE lp.address != '127.0.0.1';
+"Show me all listening ports"
+→ sentinel_query: SELECT * FROM listening_ports WHERE port > 0;
+
+"What processes are running as root?"
+→ sentinel_query: SELECT name, path, cmdline FROM processes WHERE uid = 0;
+
+"Any SSH keys on this machine?"
+→ sentinel_query: SELECT * FROM user_ssh_keys;
 ```
 
 ### `sentinel_events`
-Retrieve recent security events with optional severity/category filters.
 
-## How it works
-
-Sentinel runs in **event-driven mode** for near real-time alerting:
-
-1. **Baseline learning** — On first start, learns your normal state (known SSH hosts, listening ports)
-2. **osqueryd daemon** — Starts osqueryd with scheduled queries that write results to a JSON log
-3. **Log tailing** — Watches the results log via `fs.watch()` + 2-second poll fallback
-4. **Analysis** — Evaluates each result batch against detection rules as it arrives
-5. **Instant alerting** — High/critical events trigger immediate alerts via OpenClaw (typically < 1 second from detection)
-6. **In-memory event log** — All events stored for agent query access
+Get recent security events, filterable by severity or category:
 
 ```
-osqueryd (daemon)
-    ↓ writes JSON results to log file
-    ↓
-Sentinel watcher (fs.watch + poll)
-    ↓ parses new lines instantly
-    ↓
-Analyzer (detection rules)
-    ↓ severity >= high?
-    ↓
-OpenClaw messaging → Signal/Slack/Telegram/etc.
+"Show me critical events"
+→ sentinel_events: { severity: "critical" }
+
+"Any SSH-related events?"
+→ sentinel_events: { category: "ssh_login" }
 ```
 
-### Detection rules
+## Detection rules
 
-- **Unsigned binaries**: Any process without Apple platform signing or a known signing ID
-- **Privilege escalation**: Processes where effective UID (0/root) differs from real UID
-- **Suspicious commands**: Pattern matching for reverse shells, encoded payloads, pipe-to-shell
-- **SSH anomalies**: Logins from IPs not in the known hosts baseline (Tailscale 100.x.x.x auto-trusted)
-- **Persistence**: New or modified LaunchDaemons/LaunchAgents
-- **Critical files**: Changes to /etc/sudoers, /etc/hosts, /etc/ssh/sshd_config, /etc/passwd
-- **Network**: New externally-bound listening ports not in the baseline
+| Category | Severity | Trigger |
+|----------|----------|---------|
+| Unsigned binary | high | Process executed without valid code signature |
+| Privilege escalation | critical | `sudo`, `su`, `doas` with unexpected targets |
+| Suspicious command | high | `curl \| sh`, `base64 -d`, `nc -l`, reverse shells |
+| Unknown SSH login | high | SSH from IP not in baseline |
+| SSH brute force | critical | 5+ failed auth attempts in short window |
+| New listening port | medium | Port not seen during baseline scan |
+| File integrity | high | Changes to watched paths |
+| Persistence | high | New LaunchDaemon, LaunchAgent, or cron entry |
+
+## How baseline works
+
+On startup, Sentinel snapshots:
+- All currently logged-in remote hosts → **known hosts**
+- All currently listening ports → **known ports**
+
+Future events are compared against this baseline. Only anomalies trigger alerts. The baseline refreshes each time the gateway restarts.
+
+## Example alerts
+
+```
+🚨 SECURITY ALERT
+Severity: HIGH
+Category: ssh_login
+Time: 2026-02-21 10:15:00
+
+Unknown SSH login from 203.0.113.42
+User: root | TTY: ttys003
+
+This host is not in the known baseline.
+```
+
+```
+🔴 SECURITY ALERT
+Severity: CRITICAL
+Category: privilege_escalation
+Time: 2026-02-21 14:30:00
+
+Privilege escalation detected
+User: www → root | PID: 54321
+Command: sudo /bin/bash
+```
 
 ## Development
 
@@ -131,14 +236,25 @@ OpenClaw messaging → Signal/Slack/Telegram/etc.
 git clone https://github.com/sunil-sadasivan/openclaw-sentinel.git
 cd openclaw-sentinel
 npm install
-npm run build
-npm run dev  # watch mode
+npm run build          # Compile TypeScript
+npm run dev            # Watch mode
+
+# Install locally for testing
+openclaw plugins install .
+openclaw gateway restart
+```
+
+## Project structure
+
+```
+src/
+├── index.ts       # Plugin entry point — tool registration, watcher startup
+├── config.ts      # SentinelConfig interface, defaults, SecurityEvent types
+├── osquery.ts     # osquery binary discovery, SQL execution, config generation
+├── analyzer.ts    # Detection rules — processes, SSH, ports, files, persistence
+└── watcher.ts     # Event-driven log tailer (fs.watch + poll fallback)
 ```
 
 ## License
 
 MIT
-
-## Author
-
-[Sunil Sadasivan](https://github.com/sunil-sadasivan) / [Libra Labs LLC](https://libralabs.dev)
