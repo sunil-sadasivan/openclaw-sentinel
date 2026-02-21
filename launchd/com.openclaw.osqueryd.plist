@@ -16,6 +16,8 @@
         <string>--disable_endpointsecurity=false</string>
         <string>--events_expiry=3600</string>
         <string>--events_max=100000</string>
+        <string>--logger_rotate=true</string>
+        <string>--logger_max_log_size=52428800</string>
         <string>--force</string>
     </array>
     <key>RunAtLoad</key>
