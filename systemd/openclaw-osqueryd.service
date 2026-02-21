@@ -1,0 +1,27 @@
+[Unit]
+Description=osqueryd daemon for OpenClaw Sentinel
+Documentation=https://github.com/sunil-sadasivan/openclaw-sentinel
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=__OSQUERYD_PATH__ \
+  --config_path=__SENTINEL_DIR__/config/osquery.conf \
+  --database_path=__SENTINEL_DIR__/db \
+  --logger_path=__SENTINEL_DIR__/logs/osquery \
+  --pidfile=__SENTINEL_DIR__/osqueryd.pid \
+  --logger_plugin=filesystem \
+  --disable_events=false \
+  --events_expiry=3600 \
+  --events_max=100000 \
+  --logger_rotate=true \
+  --logger_max_log_size=52428800 \
+  --force
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=openclaw-osqueryd
+
+[Install]
+WantedBy=multi-user.target

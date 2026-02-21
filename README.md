@@ -30,19 +30,33 @@ Sentinel **does not** run osqueryd itself (it requires root). You start osqueryd
 
 ## Prerequisites
 
-- macOS (Apple Silicon or Intel)
+- **macOS** (Apple Silicon or Intel) or **Linux** (systemd-based)
 - [osquery](https://osquery.io) installed
 - [OpenClaw](https://github.com/openclaw/openclaw) running
 
 ### Install osquery
 
+**macOS:**
 ```bash
 # Download the official .pkg from https://osquery.io/downloads
-# Or if you have it already:
-which osqueryi  # Should return a path
 ```
 
-> **Note:** osquery needs **Full Disk Access** permission on macOS to use the Endpoint Security framework. Grant it to `/opt/osquery/lib/osquery.app/Contents/MacOS/osqueryd` in System Settings → Privacy & Security → Full Disk Access.
+> **Note:** osquery needs **Full Disk Access** on macOS for the Endpoint Security framework. Grant it to `/opt/osquery/lib/osquery.app/Contents/MacOS/osqueryd` in System Settings → Privacy & Security → Full Disk Access.
+
+**Linux (Debian/Ubuntu):**
+```bash
+export OSQUERY_KEY=1484120AC4E9F8A1A577AEEE97A80C63C9D8B80B
+sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys $OSQUERY_KEY
+sudo add-apt-repository 'deb [arch=amd64] https://pkg.osquery.io/deb deb main'
+sudo apt-get update && sudo apt-get install osquery
+```
+
+**Linux (RHEL/CentOS):**
+```bash
+curl -L https://pkg.osquery.io/rpm/GPG | sudo tee /etc/pki/rpm-gpg/RPM-GPG-KEY-osquery
+sudo yum-config-manager --add-repo https://pkg.osquery.io/rpm/osquery-s3-rpm.repo
+sudo yum install osquery
+```
 
 ## Installation
 
@@ -101,18 +115,23 @@ Sentinel watches osqueryd's output — you need to start osqueryd separately. Th
 sudo ./scripts/setup-daemon.sh
 ```
 
-This will:
+The script auto-detects your OS and will:
 1. Find your osqueryd binary
 2. Create the sentinel directory structure (`~/.openclaw/sentinel/`)
 3. Generate a default osquery config if none exists
-4. Install a LaunchDaemon (`/Library/LaunchDaemons/com.openclaw.osqueryd.plist`)
-5. Start osqueryd — it will auto-start on boot and restart if it crashes
+4. Install a system daemon:
+   - **macOS**: LaunchDaemon (`/Library/LaunchDaemons/com.openclaw.osqueryd.plist`)
+   - **Linux**: systemd unit (`/etc/systemd/system/openclaw-osqueryd.service`)
+5. Start osqueryd — auto-starts on boot and restarts on crash
 
 ```bash
-# Check status
+# macOS
 sudo launchctl list com.openclaw.osqueryd
 
-# Uninstall
+# Linux
+sudo systemctl status openclaw-osqueryd
+
+# Uninstall (both)
 sudo ./scripts/setup-daemon.sh --uninstall
 ```
 
