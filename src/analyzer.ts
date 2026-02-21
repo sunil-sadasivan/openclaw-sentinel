@@ -130,8 +130,9 @@ export function analyzeLoginEvents(
     if (!host || host === "localhost" || host === "::1" || host === "127.0.0.1")
       continue;
 
-    // Skip known Tailscale IPs (100.x.x.x)
-    if (host.startsWith("100.")) continue;
+    // Skip Tailscale CGNAT range (100.64.0.0/10)
+    const octets = host.split(".").map(Number);
+    if (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) continue;
 
     // New remote login from unknown host
     if (!knownHosts.has(host)) {

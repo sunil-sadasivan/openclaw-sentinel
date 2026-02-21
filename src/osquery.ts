@@ -117,7 +117,7 @@ export function generateOsqueryConfig(config: SentinelConfig): object {
       // Failed SSH/auth attempts (brute force detection)
       failed_auth: {
         query:
-          "SELECT time, message FROM asl WHERE facility = 'auth' AND level <= 3 AND message LIKE '%authentication error%' OR message LIKE '%Failed password%' OR message LIKE '%Invalid user%' ORDER BY time DESC LIMIT 50;",
+          "SELECT time, message FROM asl WHERE facility = 'auth' AND level <= 3 AND (message LIKE '%authentication error%' OR message LIKE '%Failed password%' OR message LIKE '%Invalid user%') ORDER BY time DESC LIMIT 50;",
         interval: 60,
         removed: false,
         description: "Failed authentication attempts",

@@ -2,11 +2,17 @@
  * Sentinel configuration types and defaults.
  */
 
+/** Severity levels for security events */
+export type Severity = "critical" | "high" | "medium" | "low" | "info";
+
+export const SEVERITY_ORDER: Severity[] = ["info", "low", "medium", "high", "critical"];
+
 export interface SentinelConfig {
   osqueryPath?: string;
   configPath?: string;
   alertChannel?: string;
   alertTo?: string;
+  alertSeverity?: Severity;
   logPath?: string;
   pollIntervalMs?: number;
   enableProcessMonitor?: boolean;
@@ -57,9 +63,6 @@ export const DEFAULT_CONFIG: Required<
     "/Library/LaunchAgents/",
   ],
 };
-
-/** Severity levels for security events */
-export type Severity = "critical" | "high" | "medium" | "low" | "info";
 
 /** A security event detected by Sentinel */
 export interface SecurityEvent {
