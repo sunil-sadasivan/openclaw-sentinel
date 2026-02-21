@@ -20,8 +20,8 @@ import { join } from "node:path";
 import { homedir } from "node:os";
 import { Type } from "@sinclair/typebox";
 import type { SentinelConfig, SecurityEvent } from "./config.js";
-import { SEVERITY_ORDER } from "./config.js";
 import { findOsquery, query } from "./osquery.js";
+import { shouldAlert, meetsThreshold, createAlertState } from "./alerts.js";
 import { ResultLogWatcher } from "./watcher.js";
 import type { OsqueryResultBatch } from "./watcher.js";
 import {
@@ -44,58 +44,14 @@ const state = {
 };
 
 const MAX_EVENT_LOG = 1000;
-const MAX_ALERTS_PER_MINUTE = 10;
-const ALERT_DEDUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
 const SENTINEL_DIR_DEFAULT = join(homedir(), ".openclaw", "sentinel");
-
-// Rate limiting state
-const alertState = {
-  recentAlerts: [] as { time: number; title: string }[],
-};
+const alertRateState = createAlertState();
 
 function logEvent(evt: SecurityEvent): void {
   state.eventLog.push(evt);
   if (state.eventLog.length > MAX_EVENT_LOG) {
     state.eventLog = state.eventLog.slice(-MAX_EVENT_LOG);
   }
-}
-
-/**
- * Check if an alert should be sent (rate limit + dedup).
- */
-function shouldAlert(evt: SecurityEvent): boolean {
-  const now = Date.now();
-
-  // Clean old entries
-  alertState.recentAlerts = alertState.recentAlerts.filter(
-    (a) => now - a.time < 60_000,
-  );
-
-  // Rate limit: max alerts per minute
-  if (alertState.recentAlerts.length >= MAX_ALERTS_PER_MINUTE) {
-    return false;
-  }
-
-  // Dedup: same title within window
-  const isDupe = alertState.recentAlerts.some(
-    (a) => a.title === evt.title && now - a.time < ALERT_DEDUP_WINDOW_MS,
-  );
-  if (isDupe) return false;
-
-  alertState.recentAlerts.push({ time: now, title: evt.title });
-  return true;
-}
-
-/**
- * Check if event meets minimum severity threshold.
- */
-function meetsThreshold(
-  severity: SecurityEvent["severity"],
-  minSeverity: string = "high",
-): boolean {
-  const evtLevel = SEVERITY_ORDER.indexOf(severity);
-  const minLevel = SEVERITY_ORDER.indexOf(minSeverity as any);
-  return evtLevel >= (minLevel >= 0 ? minLevel : 3); // default to "high" index
 }
 
 /**
@@ -187,7 +143,7 @@ function handleResult(
   for (const evt of events) {
     logEvent(evt);
 
-    if (meetsThreshold(evt.severity, config.alertSeverity) && shouldAlert(evt)) {
+    if (meetsThreshold(evt.severity, config.alertSeverity) && shouldAlert(evt, alertRateState)) {
       sendAlert(formatAlert(evt)).catch((err) => {
         console.error("[sentinel] alert failed:", err);
       });

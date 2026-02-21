@@ -8,7 +8,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "test": "node --test dist/**/*.test.js",
+    "test": "node --test dist/__tests__/*.test.js",
     "lint": "eslint src/",
     "prepublishOnly": "npm run build"
   },
