@@ -227,14 +227,39 @@ export default function sentinel(api: any): void {
   });
 
   // ── Agent tool: sentinel_query ──
+  // Tables that can make outbound requests or exfiltrate data
+  const BLOCKED_TABLES = [
+    "carves",        // file carving (exfiltration)
+    "curl",          // HTTP requests
+    "curl_certificate", // TLS connections
+  ];
+
   api.registerTool({
     name: "sentinel_query",
     description:
-      "Run a custom osquery SQL query for ad-hoc security investigation.",
+      "Run a custom osquery SQL query for ad-hoc security investigation. " +
+      "Blocked tables: carves, curl, curl_certificate (security risk).",
     parameters: Type.Object({
       sql: Type.String({ description: "osquery SQL query" }),
     }),
     async execute(_id: string, params: { sql: string }) {
+      // Safety: block dangerous tables
+      const sqlLower = params.sql.toLowerCase();
+      const blocked = BLOCKED_TABLES.find((t) => sqlLower.includes(t));
+      if (blocked) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Blocked: table "${blocked}" is not allowed for security reasons.`,
+            },
+          ],
+        };
+      }
+
+      // Audit log
+      console.log(`[sentinel] Query: ${params.sql}`);
+
       const osqueryiPath = findOsquery(pluginConfig.osqueryPath);
       if (!osqueryiPath) {
         return {
