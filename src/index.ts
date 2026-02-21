@@ -13,6 +13,7 @@ import { findOsquery, query } from "./osquery.js";
 import {
   analyzeProcessEvents,
   analyzeLoginEvents,
+  analyzeFailedAuth,
   analyzeListeningPorts,
   analyzeFileEvents,
   formatAlert,
@@ -105,6 +106,17 @@ async function poll(
       "SELECT type, user, host, time, pid FROM logged_in_users;",
     );
     allEvents.push(...analyzeLoginEvents(logins, state.knownHosts));
+  } catch {
+    /* ignore */
+  }
+
+  try {
+    // Failed auth / SSH brute force detection
+    const failedAuth = await query(
+      osqueryPath,
+      "SELECT time, message FROM asl WHERE facility = 'auth' AND level <= 3 AND (message LIKE '%authentication error%' OR message LIKE '%Failed password%' OR message LIKE '%Invalid user%') ORDER BY time DESC LIMIT 50;",
+    );
+    allEvents.push(...analyzeFailedAuth(failedAuth));
   } catch {
     /* ignore */
   }

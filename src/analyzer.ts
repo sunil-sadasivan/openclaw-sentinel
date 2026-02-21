@@ -151,6 +151,54 @@ export function analyzeLoginEvents(
 }
 
 /**
+ * Analyze failed authentication attempts (SSH brute force, etc.).
+ */
+export function analyzeFailedAuth(
+  rows: Record<string, string>[],
+): SecurityEvent[] {
+  const events: SecurityEvent[] = [];
+
+  if (rows.length === 0) return events;
+
+  // Count failed attempts — bulk failures = brute force
+  const recentFailures = rows.length;
+
+  if (recentFailures >= 10) {
+    events.push(
+      event(
+        "critical",
+        "auth",
+        "Possible brute force attack",
+        `${recentFailures} failed authentication attempts detected in the last minute.\nSample: ${rows[0]?.message ?? "unknown"}`,
+        { count: recentFailures, samples: rows.slice(0, 5) },
+      ),
+    );
+  } else if (recentFailures >= 3) {
+    events.push(
+      event(
+        "high",
+        "auth",
+        "Multiple failed login attempts",
+        `${recentFailures} failed authentication attempts detected.\nSample: ${rows[0]?.message ?? "unknown"}`,
+        { count: recentFailures, samples: rows.slice(0, 3) },
+      ),
+    );
+  } else if (recentFailures > 0) {
+    events.push(
+      event(
+        "medium",
+        "auth",
+        "Failed login attempt",
+        rows[0]?.message ?? "Failed authentication attempt detected",
+        { count: recentFailures, message: rows[0]?.message },
+      ),
+    );
+  }
+
+  return events;
+}
+
+/**
  * Analyze listening ports for new services.
  */
 export function analyzeListeningPorts(

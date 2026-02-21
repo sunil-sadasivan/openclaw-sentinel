@@ -114,6 +114,14 @@ export function generateOsqueryConfig(config: SentinelConfig): object {
         removed: false,
         description: "Launch daemons and agents (persistence detection)",
       },
+      // Failed SSH/auth attempts (brute force detection)
+      failed_auth: {
+        query:
+          "SELECT time, message FROM asl WHERE facility = 'auth' AND level <= 3 AND message LIKE '%authentication error%' OR message LIKE '%Failed password%' OR message LIKE '%Invalid user%' ORDER BY time DESC LIMIT 50;",
+        interval: 60,
+        removed: false,
+        description: "Failed authentication attempts",
+      },
       // SSH keys — detect additions
       ssh_keys: {
         query: "SELECT uid, path, encrypted FROM user_ssh_keys;",
