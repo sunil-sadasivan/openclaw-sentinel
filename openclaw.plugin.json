@@ -23,6 +23,11 @@
         "type": "string",
         "description": "Target for alerts (phone number, channel id, etc.)"
       },
+      "alertSeverity": {
+        "type": "string",
+        "enum": ["critical", "high", "medium", "low", "info"],
+        "description": "Minimum severity level to trigger alerts (default: high)"
+      },
       "logPath": {
         "type": "string",
         "description": "Path to store sentinel event logs"
