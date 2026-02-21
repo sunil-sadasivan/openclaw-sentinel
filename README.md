@@ -93,11 +93,27 @@ Retrieve recent security events with optional severity/category filters.
 
 ## How it works
 
-1. **Baseline learning** — On first start, Sentinel learns your normal state (known SSH hosts, listening ports)
-2. **Continuous polling** — Every 30 seconds (configurable), queries osquery for new events
-3. **Analysis** — Evaluates events against rules (unsigned binaries, privilege escalation, suspicious commands, etc.)
-4. **Alerting** — High/critical events trigger immediate alerts via your OpenClaw channel
-5. **Logging** — All events stored in-memory for agent query access
+Sentinel runs in **event-driven mode** for near real-time alerting:
+
+1. **Baseline learning** — On first start, learns your normal state (known SSH hosts, listening ports)
+2. **osqueryd daemon** — Starts osqueryd with scheduled queries that write results to a JSON log
+3. **Log tailing** — Watches the results log via `fs.watch()` + 2-second poll fallback
+4. **Analysis** — Evaluates each result batch against detection rules as it arrives
+5. **Instant alerting** — High/critical events trigger immediate alerts via OpenClaw (typically < 1 second from detection)
+6. **In-memory event log** — All events stored for agent query access
+
+```
+osqueryd (daemon)
+    ↓ writes JSON results to log file
+    ↓
+Sentinel watcher (fs.watch + poll)
+    ↓ parses new lines instantly
+    ↓
+Analyzer (detection rules)
+    ↓ severity >= high?
+    ↓
+OpenClaw messaging → Signal/Slack/Telegram/etc.
+```
 
 ### Detection rules
 

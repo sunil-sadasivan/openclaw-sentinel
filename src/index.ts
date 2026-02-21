@@ -1,15 +1,27 @@
 /**
  * OpenClaw Sentinel Plugin
  *
- * Real-time endpoint security monitoring using osquery.
- * Monitors process execution, SSH connections, privilege escalation,
- * file integrity, and network activity. Alerts via OpenClaw messaging.
+ * Real-time endpoint security monitoring using osquery in daemon mode.
+ * Uses event-driven log tailing for sub-second alerting.
+ *
+ * Architecture:
+ *   osqueryd (daemon) → writes results to JSON log
+ *   Sentinel watcher  → tails log file via fs.watch + poll fallback
+ *   Analyzer          → evaluates results against detection rules
+ *   OpenClaw messaging → alerts on configured channel
  */
 
+import { execFile, spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { Type } from "@sinclair/typebox";
 import type { SentinelConfig, SecurityEvent } from "./config.js";
 import { DEFAULT_CONFIG } from "./config.js";
-import { findOsquery, query } from "./osquery.js";
+import { findOsquery, query, generateOsqueryConfig } from "./osquery.js";
+import { ResultLogWatcher } from "./watcher.js";
+import type { OsqueryResultBatch } from "./watcher.js";
 import {
   analyzeProcessEvents,
   analyzeLoginEvents,
@@ -19,16 +31,18 @@ import {
   formatAlert,
 } from "./analyzer.js";
 
-// State tracking across polls
+// ── State ──
 const state = {
   knownHosts: new Set<string>(),
   knownPorts: new Set<number>(),
-  lastPollTime: 0,
   eventLog: [] as SecurityEvent[],
   initialized: false,
+  daemonPid: null as number | null,
+  watching: false,
 };
 
 const MAX_EVENT_LOG = 1000;
+const SENTINEL_DIR_DEFAULT = join(homedir(), ".openclaw", "sentinel");
 
 function logEvent(evt: SecurityEvent): void {
   state.eventLog.push(evt);
@@ -41,26 +55,21 @@ function logEvent(evt: SecurityEvent): void {
  * Initialize baseline state — learn what's "normal" on first run.
  */
 async function initializeBaseline(
-  osqueryPath: string,
-  config: SentinelConfig,
+  osqueryiPath: string,
 ): Promise<void> {
   if (state.initialized) return;
 
   try {
-    // Learn current logged-in hosts
     const logins = await query(
-      osqueryPath,
+      osqueryiPath,
       "SELECT DISTINCT host FROM logged_in_users WHERE host != '' AND host != 'localhost';",
     );
     for (const row of logins) {
       if (row.host) state.knownHosts.add(row.host);
     }
-    // Also trust Tailscale IPs by default
-    // (100.x.x.x range is always Tailscale)
 
-    // Learn current listening ports
     const ports = await query(
-      osqueryPath,
+      osqueryiPath,
       "SELECT DISTINCT port FROM listening_ports WHERE port > 0;",
     );
     for (const row of ports) {
@@ -70,101 +79,167 @@ async function initializeBaseline(
 
     state.initialized = true;
   } catch (err) {
-    // Non-fatal — we'll try again next poll
     console.error("[sentinel] baseline init failed:", err);
   }
 }
 
 /**
- * Run a single monitoring cycle.
+ * Start osqueryd in daemon mode with our config.
  */
-async function poll(
-  osqueryPath: string,
+async function startDaemon(
+  config: SentinelConfig,
+  sentinelDir: string,
+): Promise<number | null> {
+  const configDir = join(sentinelDir, "config");
+  const logDir = join(sentinelDir, "logs", "osquery");
+  const dbDir = join(sentinelDir, "db");
+  const pidFile = join(sentinelDir, "osqueryd.pid");
+
+  await mkdir(configDir, { recursive: true });
+  await mkdir(logDir, { recursive: true });
+  await mkdir(dbDir, { recursive: true });
+
+  // Write osquery config
+  const osqueryConfig = generateOsqueryConfig(config);
+  // Override log path to our sentinel dir
+  (osqueryConfig as any).options.logger_path = logDir;
+  const configFile = join(configDir, "osquery.conf");
+  await writeFile(configFile, JSON.stringify(osqueryConfig, null, 2));
+
+  // Find osqueryd (daemon binary)
+  const osquerydPaths = [
+    config.osqueryPath?.replace("osqueryi", "osqueryd"),
+    "/opt/homebrew/bin/osqueryd",
+    "/usr/local/bin/osqueryd",
+    "/usr/bin/osqueryd",
+  ].filter(Boolean) as string[];
+
+  let osquerydPath: string | null = null;
+  for (const p of osquerydPaths) {
+    if (existsSync(p)) {
+      osquerydPath = p;
+      break;
+    }
+  }
+
+  if (!osquerydPath) {
+    console.error("[sentinel] osqueryd not found");
+    return null;
+  }
+
+  // Check if already running
+  if (existsSync(pidFile)) {
+    try {
+      const pid = parseInt(await readFile(pidFile, "utf-8"), 10);
+      process.kill(pid, 0); // Check if process exists
+      console.log(`[sentinel] osqueryd already running (pid ${pid})`);
+      return pid;
+    } catch {
+      // Process not running, clean up pid file
+    }
+  }
+
+  // Start osqueryd
+  const child = spawn(
+    osquerydPath,
+    [
+      `--config_path=${configFile}`,
+      `--database_path=${dbDir}`,
+      `--logger_path=${logDir}`,
+      `--pidfile=${pidFile}`,
+      "--logger_plugin=filesystem",
+      "--disable_events=false",
+      "--disable_endpointsecurity=false",
+      "--events_expiry=3600",
+      "--events_max=100000",
+      "--force",
+      "--daemonize=false", // Stay in foreground so we manage lifecycle
+    ],
+    {
+      stdio: "ignore",
+      detached: true,
+    },
+  );
+
+  child.unref();
+
+  if (child.pid) {
+    console.log(`[sentinel] osqueryd started (pid ${child.pid})`);
+    // Write pid file ourselves since daemonize=false
+    await writeFile(pidFile, String(child.pid));
+    return child.pid;
+  }
+
+  return null;
+}
+
+/**
+ * Stop the osqueryd daemon.
+ */
+async function stopDaemon(sentinelDir: string): Promise<void> {
+  const pidFile = join(sentinelDir, "osqueryd.pid");
+  if (!existsSync(pidFile)) return;
+
+  try {
+    const pid = parseInt(await readFile(pidFile, "utf-8"), 10);
+    process.kill(pid, "SIGTERM");
+    console.log(`[sentinel] osqueryd stopped (pid ${pid})`);
+  } catch {
+    // Process already gone
+  }
+}
+
+/**
+ * Handle an osquery result batch — route to appropriate analyzer.
+ */
+function handleResult(
+  result: OsqueryResultBatch,
   config: SentinelConfig,
   sendAlert: (text: string) => Promise<void>,
-): Promise<SecurityEvent[]> {
-  const allEvents: SecurityEvent[] = [];
+): void {
+  let events: SecurityEvent[] = [];
 
-  try {
-    // Process execution monitoring
-    if (config.enableProcessMonitor ?? DEFAULT_CONFIG.enableProcessMonitor) {
-      const since = state.lastPollTime || Math.floor(Date.now() / 1000) - 60;
-      const rows = await query(
-        osqueryPath,
-        `SELECT pid, path, cmdline, uid, euid, username, signing_id, platform_binary, event_type, time FROM es_process_events WHERE time > ${since} AND event_type = 'exec';`,
-      );
-      allEvents.push(...analyzeProcessEvents(rows, config));
-    }
-  } catch {
-    // es_process_events requires Endpoint Security — may not be available
+  const rows = result.snapshot ?? (result.columns ? [result.columns] : []);
+
+  switch (result.name) {
+    case "process_events":
+      events = analyzeProcessEvents(rows, config);
+      break;
+    case "logged_in_users":
+      events = analyzeLoginEvents(rows, state.knownHosts);
+      break;
+    case "failed_auth":
+      events = analyzeFailedAuth(rows);
+      break;
+    case "listening_ports":
+      events = analyzeListeningPorts(rows, state.knownPorts);
+      break;
+    // File events from es_process_file_events
+    default:
+      if (
+        result.name?.includes("file") ||
+        result.name?.includes("integrity")
+      ) {
+        events = analyzeFileEvents(rows);
+      }
+      break;
   }
 
-  try {
-    // Login monitoring
-    const logins = await query(
-      osqueryPath,
-      "SELECT type, user, host, time, pid FROM logged_in_users;",
-    );
-    allEvents.push(...analyzeLoginEvents(logins, state.knownHosts));
-  } catch {
-    /* ignore */
-  }
-
-  try {
-    // Failed auth / SSH brute force detection
-    const failedAuth = await query(
-      osqueryPath,
-      "SELECT time, message FROM asl WHERE facility = 'auth' AND level <= 3 AND (message LIKE '%authentication error%' OR message LIKE '%Failed password%' OR message LIKE '%Invalid user%') ORDER BY time DESC LIMIT 50;",
-    );
-    allEvents.push(...analyzeFailedAuth(failedAuth));
-  } catch {
-    /* ignore */
-  }
-
-  try {
-    // Network monitoring
-    if (config.enableNetworkMonitor ?? DEFAULT_CONFIG.enableNetworkMonitor) {
-      const ports = await query(
-        osqueryPath,
-        "SELECT lp.port, lp.address, lp.protocol, p.name, p.path FROM listening_ports lp JOIN processes p ON lp.pid = p.pid WHERE lp.port > 0;",
-      );
-      allEvents.push(...analyzeListeningPorts(ports, state.knownPorts));
-    }
-  } catch {
-    /* ignore */
-  }
-
-  try {
-    // File integrity monitoring
-    if (config.enableFileIntegrity ?? DEFAULT_CONFIG.enableFileIntegrity) {
-      const since = state.lastPollTime || Math.floor(Date.now() / 1000) - 60;
-      const files = await query(
-        osqueryPath,
-        `SELECT pid, path, filename, dest_filename, event_type, time FROM es_process_file_events WHERE time > ${since};`,
-      );
-      allEvents.push(...analyzeFileEvents(files));
-    }
-  } catch {
-    /* ignore */
-  }
-
-  state.lastPollTime = Math.floor(Date.now() / 1000);
-
-  // Log and alert
-  for (const evt of allEvents) {
+  for (const evt of events) {
     logEvent(evt);
 
-    // Alert for high+ severity
     if (evt.severity === "critical" || evt.severity === "high") {
-      try {
-        await sendAlert(formatAlert(evt));
-      } catch (alertErr) {
-        console.error("[sentinel] alert send failed:", alertErr);
-      }
+      sendAlert(formatAlert(evt)).catch((err) => {
+        console.error("[sentinel] alert failed:", err);
+      });
     }
   }
 
-  return allEvents;
+  if (events.length > 0) {
+    console.log(
+      `[sentinel] ${events.length} events from ${result.name}`,
+    );
+  }
 }
 
 /**
@@ -172,14 +247,15 @@ async function poll(
  */
 export default function sentinel(api: any): void {
   const pluginConfig: SentinelConfig = api.getConfig?.() ?? {};
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
-  let osqueryPath: string | null = null;
+  let watcher: ResultLogWatcher | null = null;
+  const sentinelDir =
+    pluginConfig.logPath ?? SENTINEL_DIR_DEFAULT;
 
   // ── Agent tool: sentinel_status ──
   api.registerTool({
     name: "sentinel_status",
     description:
-      "Get the current security monitoring status — active alerts, event counts, and system health.",
+      "Get current security monitoring status — daemon state, active alerts, event counts, and system health.",
     parameters: Type.Object({}),
     async execute() {
       const recentEvents = state.eventLog.slice(-20);
@@ -191,15 +267,16 @@ export default function sentinel(api: any): void {
       ).length;
 
       const status = {
-        monitoring: !!pollTimer,
-        osqueryAvailable: !!osqueryPath,
-        osqueryPath,
+        mode: "event-driven",
+        daemonPid: state.daemonPid,
+        watching: state.watching,
         initialized: state.initialized,
         knownHosts: Array.from(state.knownHosts),
         knownPorts: Array.from(state.knownPorts).sort((a, b) => a - b),
         totalEvents: state.eventLog.length,
         criticalEvents: criticalCount,
         highEvents: highCount,
+        sentinelDir,
         recentEvents: recentEvents.map((e) => ({
           time: new Date(e.timestamp).toISOString(),
           severity: e.severity,
@@ -209,12 +286,7 @@ export default function sentinel(api: any): void {
       };
 
       return {
-        content: [
-          {
-            type: "text",
-            text: JSON.stringify(status, null, 2),
-          },
-        ],
+        content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
       };
     },
   });
@@ -223,42 +295,32 @@ export default function sentinel(api: any): void {
   api.registerTool({
     name: "sentinel_query",
     description:
-      "Run a custom osquery SQL query against the endpoint. Use for ad-hoc security investigation.",
+      "Run a custom osquery SQL query for ad-hoc security investigation.",
     parameters: Type.Object({
-      sql: Type.String({
-        description: "osquery SQL query to execute",
-      }),
+      sql: Type.String({ description: "osquery SQL query" }),
     }),
     async execute(_id: string, params: { sql: string }) {
-      if (!osqueryPath) {
+      const osqueryiPath = findOsquery(pluginConfig.osqueryPath);
+      if (!osqueryiPath) {
         return {
           content: [
             {
               type: "text",
-              text: "osquery is not installed. Install via: brew install osquery",
+              text: "osquery not installed. Run: brew install osquery",
             },
           ],
         };
       }
-
       try {
-        const results = await query(osqueryPath, params.sql);
+        const results = await query(osqueryiPath, params.sql);
         return {
           content: [
-            {
-              type: "text",
-              text: JSON.stringify(results, null, 2),
-            },
+            { type: "text", text: JSON.stringify(results, null, 2) },
           ],
         };
       } catch (err) {
         return {
-          content: [
-            {
-              type: "text",
-              text: `Query error: ${String(err)}`,
-            },
-          ],
+          content: [{ type: "text", text: `Query error: ${String(err)}` }],
         };
       }
     },
@@ -268,39 +330,22 @@ export default function sentinel(api: any): void {
   api.registerTool({
     name: "sentinel_events",
     description:
-      "Get recent security events detected by Sentinel. Filter by severity or category.",
+      "Get recent security events. Filter by severity or category.",
     parameters: Type.Object({
-      severity: Type.Optional(
-        Type.String({
-          description:
-            "Filter by severity: critical, high, medium, low, info",
-        }),
-      ),
-      category: Type.Optional(
-        Type.String({
-          description:
-            "Filter by category: process, network, file, auth, privilege",
-        }),
-      ),
-      limit: Type.Optional(
-        Type.Number({ description: "Max events to return (default 20)" }),
-      ),
+      severity: Type.Optional(Type.String()),
+      category: Type.Optional(Type.String()),
+      limit: Type.Optional(Type.Number()),
     }),
     async execute(
       _id: string,
       params: { severity?: string; category?: string; limit?: number },
     ) {
       let events = [...state.eventLog];
-
-      if (params.severity) {
+      if (params.severity)
         events = events.filter((e) => e.severity === params.severity);
-      }
-      if (params.category) {
+      if (params.category)
         events = events.filter((e) => e.category === params.category);
-      }
-
-      const limit = params.limit ?? 20;
-      events = events.slice(-limit);
+      events = events.slice(-(params.limit ?? 20));
 
       return {
         content: [
@@ -308,7 +353,7 @@ export default function sentinel(api: any): void {
             type: "text",
             text:
               events.length === 0
-                ? "No security events found matching filters."
+                ? "No security events found."
                 : events.map((e) => formatAlert(e)).join("\n\n---\n\n"),
           },
         ],
@@ -316,21 +361,20 @@ export default function sentinel(api: any): void {
     },
   });
 
-  // ── Lifecycle: start monitoring ──
-  api.onReady?.(() => {
-    osqueryPath = findOsquery(pluginConfig.osqueryPath);
+  // ── Lifecycle: start ──
+  api.onReady?.(async () => {
+    const osqueryiPath = findOsquery(pluginConfig.osqueryPath);
 
-    if (!osqueryPath) {
+    if (!osqueryiPath) {
       console.warn(
         "[sentinel] osquery not found. Install via: brew install osquery",
       );
       return;
     }
 
-    console.log(`[sentinel] osquery found at ${osqueryPath}`);
+    console.log(`[sentinel] Starting in event-driven mode...`);
 
     const sendAlert = async (text: string): Promise<void> => {
-      // Use OpenClaw's messaging to alert on the configured channel
       try {
         await api.sendMessage?.({
           channel: pluginConfig.alertChannel,
@@ -338,46 +382,48 @@ export default function sentinel(api: any): void {
           message: text,
         });
       } catch {
-        console.error("[sentinel] Failed to send alert:", text);
+        console.error("[sentinel] Alert delivery failed:", text);
       }
     };
 
-    // Initialize baseline
-    initializeBaseline(osqueryPath, pluginConfig).then(() => {
-      console.log(
-        `[sentinel] Baseline initialized: ${state.knownHosts.size} hosts, ${state.knownPorts.size} ports`,
-      );
+    // 1. Initialize baseline
+    await initializeBaseline(osqueryiPath);
+    console.log(
+      `[sentinel] Baseline: ${state.knownHosts.size} hosts, ${state.knownPorts.size} ports`,
+    );
+
+    // 2. Start osqueryd daemon
+    const pid = await startDaemon(pluginConfig, sentinelDir);
+    state.daemonPid = pid;
+
+    // 3. Start watching the results log
+    const logDir = join(sentinelDir, "logs", "osquery");
+    watcher = new ResultLogWatcher(logDir);
+
+    watcher.on("result", (result: OsqueryResultBatch) => {
+      handleResult(result, pluginConfig, sendAlert);
     });
 
-    // Start polling
-    const intervalMs =
-      pluginConfig.pollIntervalMs ?? DEFAULT_CONFIG.pollIntervalMs;
+    watcher.on("error", (err: Error) => {
+      console.error("[sentinel] watcher error:", err.message);
+    });
 
-    pollTimer = setInterval(async () => {
-      if (!osqueryPath) return;
-      try {
-        const events = await poll(osqueryPath, pluginConfig, sendAlert);
-        if (events.length > 0) {
-          console.log(
-            `[sentinel] ${events.length} security events detected`,
-          );
-        }
-      } catch (err) {
-        console.error("[sentinel] poll error:", err);
-      }
-    }, intervalMs);
+    watcher.on("started", () => {
+      state.watching = true;
+      console.log("[sentinel] Event-driven monitoring active ⚡");
+    });
 
-    console.log(
-      `[sentinel] Monitoring started (poll every ${intervalMs / 1000}s)`,
-    );
+    await watcher.start();
   });
 
-  // ── Lifecycle: cleanup ──
-  api.onShutdown?.(() => {
-    if (pollTimer) {
-      clearInterval(pollTimer);
-      pollTimer = null;
+  // ── Lifecycle: shutdown ──
+  api.onShutdown?.(async () => {
+    if (watcher) {
+      watcher.stop();
+      watcher = null;
+      state.watching = false;
     }
-    console.log("[sentinel] Monitoring stopped");
+    await stopDaemon(sentinelDir);
+    console.log("[sentinel] Shutdown complete");
   });
 }
