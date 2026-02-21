@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.openclaw.osqueryd</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__OSQUERYD_PATH__</string>
+        <string>--config_path=__SENTINEL_DIR__/config/osquery.conf</string>
+        <string>--database_path=__SENTINEL_DIR__/db</string>
+        <string>--logger_path=__SENTINEL_DIR__/logs/osquery</string>
+        <string>--pidfile=__SENTINEL_DIR__/osqueryd.pid</string>
+        <string>--logger_plugin=filesystem</string>
+        <string>--disable_events=false</string>
+        <string>--disable_endpointsecurity=false</string>
+        <string>--events_expiry=3600</string>
+        <string>--events_max=100000</string>
+        <string>--force</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>StandardOutPath</key>
+    <string>__SENTINEL_DIR__/logs/osqueryd-stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__SENTINEL_DIR__/logs/osqueryd-stderr.log</string>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>

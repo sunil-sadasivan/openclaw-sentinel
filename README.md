@@ -93,15 +93,34 @@ Add to your `~/.openclaw/openclaw.json` under `plugins.entries`:
 
 ## Starting osqueryd
 
-Sentinel watches osqueryd's output — you need to start osqueryd separately:
+Sentinel watches osqueryd's output — you need to start osqueryd separately. The included setup script handles everything.
 
-### Manual start
+### Automated setup (recommended)
+
+```bash
+sudo ./scripts/setup-daemon.sh
+```
+
+This will:
+1. Find your osqueryd binary
+2. Create the sentinel directory structure (`~/.openclaw/sentinel/`)
+3. Generate a default osquery config if none exists
+4. Install a LaunchDaemon (`/Library/LaunchDaemons/com.openclaw.osqueryd.plist`)
+5. Start osqueryd — it will auto-start on boot and restart if it crashes
+
+```bash
+# Check status
+sudo launchctl list com.openclaw.osqueryd
+
+# Uninstall
+sudo ./scripts/setup-daemon.sh --uninstall
+```
+
+### Manual start (for testing)
 
 ```bash
 SENTINEL_DIR=~/.openclaw/sentinel
 
-# Generate config (Sentinel creates this on first load)
-# Then start the daemon:
 sudo osqueryd \
   --config_path=$SENTINEL_DIR/config/osquery.conf \
   --database_path=$SENTINEL_DIR/db \
@@ -114,40 +133,13 @@ sudo osqueryd \
   --force
 ```
 
-### Via launchd (recommended for always-on monitoring)
+### Full Disk Access
 
-Create `/Library/LaunchDaemons/com.openclaw.osqueryd.plist`:
+For Endpoint Security framework support (process events, file events), grant Full Disk Access:
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>com.openclaw.osqueryd</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>/opt/osquery/lib/osquery.app/Contents/MacOS/osqueryd</string>
-        <string>--config_path=/Users/YOU/.openclaw/sentinel/config/osquery.conf</string>
-        <string>--database_path=/Users/YOU/.openclaw/sentinel/db</string>
-        <string>--logger_path=/Users/YOU/.openclaw/sentinel/logs/osquery</string>
-        <string>--pidfile=/Users/YOU/.openclaw/sentinel/osqueryd.pid</string>
-        <string>--logger_plugin=filesystem</string>
-        <string>--disable_events=false</string>
-        <string>--events_expiry=3600</string>
-        <string>--force</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>KeepAlive</key>
-    <true/>
-</dict>
-</plist>
-```
+**System Settings → Privacy & Security → Full Disk Access → Add osqueryd**
 
-```bash
-sudo launchctl load /Library/LaunchDaemons/com.openclaw.osqueryd.plist
-```
+The path is typically `/opt/osquery/lib/osquery.app/Contents/MacOS/osqueryd`.
 
 ## Agent tools
 
