@@ -201,6 +201,47 @@ Get recent security events, filterable by severity or category:
 → sentinel_events: { category: "ssh_login" }
 ```
 
+## Usage examples
+
+Just ask your agent in natural language through any OpenClaw channel (Signal, Slack, Discord, etc.):
+
+**System overview:**
+> "How's my machine looking security-wise?"
+> "Any security alerts today?"
+> "What's the sentinel status?"
+
+**Network investigation:**
+> "What ports are open on this machine?"
+> "Show me all outbound connections"
+> "Is anything phoning home to an IP I don't recognize?"
+> "What's listening on port 5432?"
+
+**Process investigation:**
+> "What's running as root right now?"
+> "Any unsigned binaries running?"
+> "Show me recently started processes"
+> "What launched in the last hour?"
+
+**SSH & access:**
+> "Who's logged into this machine?"
+> "Any failed SSH attempts?"
+> "Has anyone tried to brute force SSH?"
+> "Show me all SSH keys on the system"
+
+**Persistence & malware hunting:**
+> "Are there any new LaunchDaemons I should know about?"
+> "Show me all cron jobs"
+> "Any changes to /etc/hosts or sudoers?"
+> "What browser extensions are installed?"
+
+**Forensics:**
+> "What happened on this machine between 2am and 5am?"
+> "Show me all shell history with sudo commands"
+> "Which processes have the most open file descriptors?"
+> "What DNS queries were made in the last hour?"
+
+The agent translates these into osquery SQL, runs them through `sentinel_query`, and explains the results in plain English.
+
 ## Detection rules
 
 | Category | Severity | Trigger |
