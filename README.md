@@ -67,7 +67,7 @@ sudo yum install osquery
 ## Installation
 
 ```bash
-openclaw plugins install /path/to/openclaw-sentinel
+openclaw plugins install openclaw-sentinel
 openclaw gateway restart
 ```
 
