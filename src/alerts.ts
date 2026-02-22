@@ -6,7 +6,7 @@ import type { SecurityEvent, Severity } from "./config.js";
 import { SEVERITY_ORDER } from "./config.js";
 
 const MAX_ALERTS_PER_MINUTE = 10;
-const ALERT_DEDUP_WINDOW_MS = 5 * 60 * 1000; // 5 minutes
+const ALERT_DEDUP_WINDOW_MS = 60 * 1000; // 1 minute
 
 export interface AlertRecord {
   time: number;

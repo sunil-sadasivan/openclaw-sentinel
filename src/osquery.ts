@@ -82,7 +82,7 @@ export function generateOsqueryConfig(config: SentinelConfig, platform?: string)
   const schedule: Record<string, object> = {
     logged_in_users: {
       query: "SELECT type, user, host, time, pid FROM logged_in_users;",
-      interval: 60,
+      interval: 10,
       removed: false,
       description: "Currently logged-in users",
     },
