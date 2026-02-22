@@ -14,7 +14,7 @@
  * (e.g., via launchd). This plugin only watches the result logs.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -171,7 +171,16 @@ function handleResult(
  * OpenClaw plugin entry point.
  */
 export default function sentinel(api: any): void {
-  const pluginConfig: SentinelConfig = api.getConfig?.() ?? {};
+    // api.getConfig() may not return all fields — merge with config file as fallback
+  const apiConfig = api.getConfig?.() ?? {};
+  let fileConfig: Record<string, unknown> = {};
+  try {
+    const cfgPath = join(homedir(), ".openclaw", "openclaw.json");
+    const raw = JSON.parse(readFileSync(cfgPath, "utf8"));
+    fileConfig = raw?.plugins?.entries?.sentinel?.config ?? {};
+  } catch { /* ignore */ }
+  const pluginConfig: SentinelConfig = { ...fileConfig, ...apiConfig } as SentinelConfig;
+  console.log(`[sentinel] Config: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}`);
   let watcher: ResultLogWatcher | null = null;
   const sentinelDir = pluginConfig.logPath ?? SENTINEL_DIR_DEFAULT;
 
