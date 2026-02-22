@@ -67,6 +67,28 @@ describe("SSH log line patterns", () => {
     assert.equal(match[2], "203.0.113.42");
   });
 
+  it("matches macOS sshd-session USER_PROCESS pattern", () => {
+    const line =
+      "Feb 22 16:39:32 sunils-mac-mini sshd-session: sunil [priv][58912]: USER_PROCESS: 58916 ttys001";
+    const match = line.match(
+      /sshd-session:\s+(\S+)\s+\[priv\]\[(\d+)\]:\s+USER_PROCESS:\s+(\d+)\s+(\S+)/,
+    );
+    assert.ok(match);
+    assert.equal(match[1], "sunil");
+    assert.equal(match[2], "58912");
+    assert.equal(match[3], "58916");
+    assert.equal(match[4], "ttys001");
+  });
+
+  it("does not match sshd-session DEAD_PROCESS", () => {
+    const line =
+      "Feb 22 16:38:12 sunils-mac-mini sshd-session: sunil [priv][53930]: DEAD_PROCESS: 53934 ttys012";
+    const match = line.match(
+      /sshd-session:\s+(\S+)\s+\[priv\]\[(\d+)\]:\s+USER_PROCESS:\s+(\d+)\s+(\S+)/,
+    );
+    assert.equal(match, null);
+  });
+
   it("does not match unrelated sshd lines", () => {
     const line =
       '2026-02-22 16:30:00.123456-0500  0x1234  Default  0x0  0  sshd: Connection closed by 100.79.207.74 port 52341';

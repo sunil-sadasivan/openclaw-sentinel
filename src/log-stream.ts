@@ -105,6 +105,67 @@ function parseLinuxLogLine(
   return parseMacOSLogLine(line, knownHosts);
 }
 
+/**
+ * Parse macOS /var/log/system.log lines for SSH events.
+ * Lines look like:
+ *   Feb 22 16:39:32 sunils-mac-mini sshd-session: sunil [priv][58912]: USER_PROCESS: 58916 ttys001
+ *   Feb 22 16:38:12 sunils-mac-mini sshd-session: sunil [priv][53930]: DEAD_PROCESS: 53934 ttys012
+ *   Feb 22 16:51:16 sunils-mac-mini sshd[60738]: Failed password for sunil from 100.79.207.74 port 52341 ssh2
+ *   Feb 22 16:51:16 sunils-mac-mini sshd[60738]: Invalid user admin from 100.79.207.74 port 52341
+ */
+function parseMacOSSyslog(
+  line: string,
+  knownHosts: Set<string>,
+): SecurityEvent | null {
+  // Match sshd-session USER_PROCESS (successful login)
+  const sessionMatch = line.match(
+    /sshd-session:\s+(\S+)\s+\[priv\]\[(\d+)\]:\s+USER_PROCESS:\s+(\d+)\s+(\S+)/,
+  );
+  if (sessionMatch) {
+    const [, user, parentPid, pid, tty] = sessionMatch;
+    // We don't have the source IP from syslog — query utmpx for it
+    return event(
+      "info",
+      "ssh_login",
+      "SSH session started",
+      `User "${user}" started SSH session (PID ${pid}, TTY ${tty})`,
+      { user, pid, parentPid, tty, source: "syslog" },
+    );
+  }
+
+  // Match Failed password (if sshd logs this to system.log)
+  const failedMatch = line.match(
+    /sshd\[\d+\]:\s+Failed\s+password\s+for\s+(?:invalid\s+user\s+)?(\S+)\s+from\s+(\S+)\s+port\s+(\d+)/,
+  );
+  if (failedMatch) {
+    const [, user, host, port] = failedMatch;
+    return event(
+      "high",
+      "ssh_login",
+      "SSH failed password attempt",
+      `Failed password for "${user}" from ${host}:${port}`,
+      { user, host, port, type: "failed_password" },
+    );
+  }
+
+  // Match Invalid user
+  const invalidMatch = line.match(
+    /sshd\[\d+\]:\s+Invalid\s+user\s+(\S+)\s+from\s+(\S+)\s+port\s+(\d+)/,
+  );
+  if (invalidMatch) {
+    const [, user, host, port] = invalidMatch;
+    return event(
+      "high",
+      "ssh_login",
+      "SSH invalid user attempt",
+      `Invalid user "${user}" from ${host}:${port}`,
+      { user, host, port, type: "invalid_user" },
+    );
+  }
+
+  return null;
+}
+
 function isTailscaleIP(host: string): boolean {
   const octets = host.split(".").map(Number);
   return octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
@@ -139,15 +200,15 @@ export class LogStreamWatcher {
   }
 
   private startMacOS(): void {
-    const predicate =
-      'process == "sshd" AND (eventMessage CONTAINS "Accepted" OR eventMessage CONTAINS "Failed password" OR eventMessage CONTAINS "Invalid user")';
-
-    this.process = spawn("log", ["stream", "--predicate", predicate, "--style", "default"], {
+    // On modern macOS (Sequoia+), sshd logs to /var/log/system.log as
+    // "sshd-session" with USER_PROCESS/DEAD_PROCESS entries, not to unified log.
+    // We tail system.log for real-time SSH detection.
+    this.process = spawn("tail", ["-F", "-n", "0", "/var/log/system.log"], {
       stdio: ["ignore", "pipe", "ignore"],
     });
 
-    console.log("[sentinel] LogStreamWatcher started (macOS log stream, SSH events)");
-    this.wireUp((line) => parseMacOSLogLine(line, this.knownHosts));
+    console.log("[sentinel] LogStreamWatcher started (macOS /var/log/system.log tail, SSH events)");
+    this.wireUp((line) => parseMacOSSyslog(line, this.knownHosts));
   }
 
   private startLinux(): void {
