@@ -348,6 +348,10 @@ export default function sentinel(api: any): void {
       watcher = null;
       state.watching = false;
     }
+    if (logStreamWatcher) {
+      logStreamWatcher.stop();
+      logStreamWatcher = null;
+    }
   };
   process.on("exit", cleanup);
   process.on("SIGTERM", cleanup);

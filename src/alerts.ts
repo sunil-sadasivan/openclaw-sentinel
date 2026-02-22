@@ -29,7 +29,7 @@ export function shouldAlert(
   alertState: AlertState,
   now: number = Date.now(),
 ): boolean {
-  // Clean entries older than the dedup window (5 min)
+  // Clean entries older than the dedup window (1 min)
   alertState.recentAlerts = alertState.recentAlerts.filter(
     (a) => now - a.time < ALERT_DEDUP_WINDOW_MS,
   );
