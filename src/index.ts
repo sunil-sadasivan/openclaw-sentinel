@@ -25,6 +25,7 @@ import { shouldAlert, meetsThreshold, createAlertState } from "./alerts.js";
 import { EventStore } from "./persistence.js";
 import { ResultLogWatcher } from "./watcher.js";
 import type { OsqueryResultBatch } from "./watcher.js";
+import { LogStreamWatcher } from "./log-stream.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -182,6 +183,7 @@ export default function sentinel(api: any): void {
   const pluginConfig: SentinelConfig = { ...fileConfig, ...apiConfig } as SentinelConfig;
   console.log(`[sentinel] Config: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}`);
   let watcher: ResultLogWatcher | null = null;
+  let logStreamWatcher: LogStreamWatcher | null = null;
   const sentinelDir = pluginConfig.logPath ?? SENTINEL_DIR_DEFAULT;
 
   const sendAlert = async (text: string): Promise<void> => {
@@ -420,6 +422,26 @@ export default function sentinel(api: any): void {
       });
 
       await watcher.start();
+
+      // Start real-time log stream watcher for SSH events
+      logStreamWatcher = new LogStreamWatcher(
+        (evt) => {
+          logEvent(evt);
+          if (
+            meetsThreshold(evt.severity, pluginConfig.alertSeverity) &&
+            shouldAlert(evt, alertRateState)
+          ) {
+            sendAlert(formatAlert(evt)).catch((err) => {
+              console.error("[sentinel] alert failed:", err);
+            });
+          }
+          console.log(
+            `[sentinel] [real-time] ${evt.severity}/${evt.category}: ${evt.title}`,
+          );
+        },
+        state.knownHosts,
+      );
+      logStreamWatcher.start();
     } catch (err) {
       console.error("[sentinel] Failed to start:", err);
     }

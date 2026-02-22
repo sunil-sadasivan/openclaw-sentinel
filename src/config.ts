@@ -72,6 +72,6 @@ export interface SecurityEvent {
   category: "process" | "network" | "file" | "auth" | "privilege" | "ssh_login";
   title: string;
   description: string;
-  details: Record<string, unknown>;
+  details: string | Record<string, unknown>;
   hostname: string;
 }

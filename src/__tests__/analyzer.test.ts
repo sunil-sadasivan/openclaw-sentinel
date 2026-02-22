@@ -138,32 +138,36 @@ describe("analyzeProcessEvents", () => {
 describe("analyzeLoginEvents", () => {
   const knownHosts = new Set(["192.168.1.100", "100.64.0.1"]);
 
-  it("detects unknown remote host", () => {
+  it("detects unknown remote host as high severity", () => {
     const rows = [
       { user: "root", host: "203.0.113.42", type: "user" },
     ];
     const events = analyzeLoginEvents(rows, knownHosts);
     assert.equal(events.length, 1);
     assert.equal(events[0].severity, "high");
-    assert.equal(events[0].category, "auth");
+    assert.equal(events[0].category, "ssh_login");
   });
 
-  it("skips known hosts", () => {
+  it("emits info event for known hosts", () => {
     const rows = [
       { user: "sunil", host: "192.168.1.100", type: "user" },
     ];
     const events = analyzeLoginEvents(rows, knownHosts);
-    assert.equal(events.length, 0);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].severity, "info");
+    assert.equal(events[0].category, "ssh_login");
   });
 
-  it("skips Tailscale CGNAT range (100.64-127.x.x)", () => {
+  it("emits info event for Tailscale CGNAT range (100.64-127.x.x)", () => {
     const rows = [
       { user: "sunil", host: "100.79.207.74", type: "user" },
       { user: "sunil", host: "100.94.48.17", type: "user" },
       { user: "sunil", host: "100.127.255.255", type: "user" },
     ];
     const events = analyzeLoginEvents(rows, new Set());
-    assert.equal(events.length, 0);
+    assert.equal(events.length, 3);
+    assert.equal(events[0].severity, "info");
+    assert.ok(events[0].description.includes("Tailscale"));
   });
 
   it("does NOT skip non-Tailscale 100.x IPs", () => {

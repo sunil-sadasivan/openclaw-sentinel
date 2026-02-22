@@ -22,21 +22,20 @@ describe("shouldAlert", () => {
     assert.equal(shouldAlert(makeEvent("Test"), state), true);
   });
 
-  it("deduplicates same title within 5 minutes", () => {
+  it("deduplicates same title within 1 minute", () => {
     const state = createAlertState();
     const now = Date.now();
     assert.equal(shouldAlert(makeEvent("Same Event"), state, now), true);
     assert.equal(shouldAlert(makeEvent("Same Event"), state, now + 1000), false);
-    assert.equal(shouldAlert(makeEvent("Same Event"), state, now + 60_000), false);
-    assert.equal(shouldAlert(makeEvent("Same Event"), state, now + 299_000), false);
+    assert.equal(shouldAlert(makeEvent("Same Event"), state, now + 30_000), false);
+    assert.equal(shouldAlert(makeEvent("Same Event"), state, now + 59_000), false);
   });
 
-  it("allows same title after 5 minute window (entries expire from rate limit window)", () => {
+  it("allows same title after 1 minute window", () => {
     const state = createAlertState();
     const now = Date.now();
     shouldAlert(makeEvent("Recurring"), state, now);
-    // After 5+ minutes AND after the 1-min rate limit window cleans up
-    assert.equal(shouldAlert(makeEvent("Recurring"), state, now + 301_000), true);
+    assert.equal(shouldAlert(makeEvent("Recurring"), state, now + 61_000), true);
   });
 
   it("allows different titles", () => {
