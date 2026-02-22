@@ -121,3 +121,114 @@ describe("Tailscale IP detection", () => {
     assert.equal(isTailscaleIP("203.0.113.42"), false);
   });
 });
+
+describe("Linux sudo log patterns", () => {
+  it("matches sudo command execution", () => {
+    const line =
+      "Feb 22 16:30:00 myhost sudo[1234]:   sunil : TTY=pts/0 ; PWD=/home/sunil ; USER=root ; COMMAND=/usr/bin/apt update";
+    const match = line.match(
+      /sudo\[\d+\]:\s+(\S+)\s*:\s*(?:.*?;\s*)?TTY=(\S+)\s*;\s*PWD=(\S+)\s*;\s*USER=(\S+)\s*;\s*COMMAND=(.*)/,
+    );
+    assert.ok(match);
+    assert.equal(match[1], "sunil");
+    assert.equal(match[2], "pts/0");
+    assert.equal(match[4], "root");
+    assert.equal(match[5].trim(), "/usr/bin/apt update");
+  });
+
+  it("matches sudo with incorrect password attempts", () => {
+    const line =
+      "Feb 22 16:30:00 myhost sudo[1234]:   sunil : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/home/sunil ; USER=root ; COMMAND=/usr/bin/rm -rf /";
+    const match = line.match(
+      /sudo\[\d+\]:\s+(\S+)\s*:\s*(?:.*?;\s*)?TTY=(\S+)\s*;\s*PWD=(\S+)\s*;\s*USER=(\S+)\s*;\s*COMMAND=(.*)/,
+    );
+    assert.ok(match);
+    assert.equal(match[1], "sunil");
+    assert.ok(line.includes("incorrect password"));
+  });
+
+  it("matches sudo PAM session opened", () => {
+    const line =
+      "Feb 22 16:30:00 myhost sudo[1234]: pam_unix(sudo:session): session opened for user root(uid=0) by sunil(uid=1000)";
+    const match = line.match(
+      /sudo\[\d+\]:\s+pam_unix\(sudo:session\):\s+session\s+opened\s+for\s+user\s+(\S+).*?by\s+(\S+)/,
+    );
+    assert.ok(match);
+    assert.equal(match[1], "root(uid=0)");
+    assert.equal(match[2], "sunil(uid=1000)");
+  });
+});
+
+describe("Linux user account log patterns", () => {
+  it("matches useradd new user", () => {
+    const line =
+      "Feb 22 16:30:00 myhost useradd[1234]: new user: name=backdoor, UID=1001, GID=1001, home=/home/backdoor, shell=/bin/bash";
+    const match = line.match(/useradd\[\d+\]:\s+new\s+user:\s+name=(\S+)/);
+    assert.ok(match);
+    assert.equal(match[1], "backdoor,");
+  });
+
+  it("matches userdel delete user", () => {
+    const line = "Feb 22 16:30:00 myhost userdel[1234]: delete user 'olduser'";
+    const match = line.match(/userdel\[\d+\]:\s+delete\s+user\s+'(\S+)'/);
+    assert.ok(match);
+    assert.equal(match[1], "olduser");
+  });
+
+  it("matches passwd password changed", () => {
+    const line =
+      "Feb 22 16:30:00 myhost passwd[1234]: pam_unix(passwd:chauthtok): password changed for sunil";
+    const match = line.match(
+      /passwd\[\d+\]:\s+pam_unix\(passwd:chauthtok\):\s+password\s+changed\s+for\s+(\S+)/,
+    );
+    assert.ok(match);
+    assert.equal(match[1], "sunil");
+  });
+
+  it("matches usermod change user", () => {
+    const line = "Feb 22 16:30:00 myhost usermod[1234]: change user 'sunil' shell";
+    const match = line.match(/usermod\[\d+\]:\s+change\s+user\s+'(\S+)'/);
+    assert.ok(match);
+    assert.equal(match[1], "sunil");
+  });
+
+  it("matches groupadd new group", () => {
+    const line =
+      "Feb 22 16:30:00 myhost groupadd[1234]: new group: name=newgroup, GID=1002";
+    const match = line.match(/groupadd\[\d+\]:\s+new\s+group:\s+name=(\S+)/);
+    assert.ok(match);
+    assert.equal(match[1], "newgroup,");
+  });
+});
+
+describe("Linux remote desktop log patterns", () => {
+  it("matches xrdp client connection", () => {
+    const line =
+      "Feb 22 16:30:00 myhost xrdp[1234]: connected client: 203.0.113.42";
+    const match = line.match(
+      /xrdp\[\d+\]:\s+.*?(?:connected|connection).*?(\d+\.\d+\.\d+\.\d+)/i,
+    );
+    assert.ok(match);
+    assert.equal(match[1], "203.0.113.42");
+  });
+
+  it("matches xrdp session started", () => {
+    const line =
+      "Feb 22 16:30:00 myhost xrdp-sesman[1234]: session started for user sunil";
+    const match = line.match(
+      /xrdp-sesman\[\d+\]:\s+.*?session\s+started.*?user\s+(\S+)/i,
+    );
+    assert.ok(match);
+    assert.equal(match[1], "sunil");
+  });
+
+  it("matches VNC connection", () => {
+    const line =
+      "Feb 22 16:30:00 myhost x11vnc[1234]: Got connection from client 203.0.113.42";
+    const match = line.match(
+      /(?:x11vnc|vnc|Xvnc)\[\d+\]:\s+.*?(?:connection|connect).*?(\d+\.\d+\.\d+\.\d+)/i,
+    );
+    assert.ok(match);
+    assert.equal(match[1], "203.0.113.42");
+  });
+});

@@ -106,6 +106,184 @@ function parseLinuxLogLine(
 }
 
 /**
+ * Parse Linux sudo events from journalctl / auth.log.
+ * Lines look like:
+ *   Feb 22 16:30:00 hostname sudo[1234]:   sunil : TTY=pts/0 ; PWD=/home/sunil ; USER=root ; COMMAND=/usr/bin/apt update
+ *   Feb 22 16:30:00 hostname sudo[1234]: pam_unix(sudo:session): session opened for user root(uid=0) by sunil(uid=1000)
+ *   Feb 22 16:30:00 hostname sudo[1234]:   sunil : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/home/sunil ; USER=root ; COMMAND=/usr/bin/rm -rf /
+ */
+function parseLinuxSudo(line: string): SecurityEvent | null {
+  // Standard sudo command log
+  const cmdMatch = line.match(
+    /sudo\[\d+\]:\s+(\S+)\s*:\s*(?:.*?;\s*)?TTY=(\S+)\s*;\s*PWD=(\S+)\s*;\s*USER=(\S+)\s*;\s*COMMAND=(.*)/,
+  );
+  if (cmdMatch) {
+    const [, user, tty, pwd, targetUser, command] = cmdMatch;
+    const hasFailure = line.includes("incorrect password");
+    return event(
+      hasFailure ? "high" : "medium",
+      "privilege",
+      hasFailure ? "sudo authentication failure" : "sudo command executed",
+      `${user} → ${targetUser}: ${command.trim()} (TTY ${tty})`,
+      { user, targetUser, command: command.trim(), tty, pwd, failed: hasFailure },
+    );
+  }
+
+  // PAM session opened for sudo
+  const sessionMatch = line.match(
+    /sudo\[\d+\]:\s+pam_unix\(sudo:session\):\s+session\s+opened\s+for\s+user\s+(\S+).*?by\s+(\S+)/,
+  );
+  if (sessionMatch) {
+    const [, targetUser, user] = sessionMatch;
+    return event(
+      "info",
+      "privilege",
+      "sudo session started",
+      `sudo session opened: ${user} → ${targetUser}`,
+      { user: user.replace(/\(.*\)/, ""), targetUser: targetUser.replace(/\(.*\)/, ""), source: "pam" },
+    );
+  }
+
+  return null;
+}
+
+/**
+ * Parse Linux user account change events.
+ * Lines from useradd/userdel/usermod/passwd via journalctl or auth.log:
+ *   Feb 22 16:30:00 hostname useradd[1234]: new user: name=backdoor, UID=1001, GID=1001, home=/home/backdoor, shell=/bin/bash
+ *   Feb 22 16:30:00 hostname userdel[1234]: delete user 'olduser'
+ *   Feb 22 16:30:00 hostname usermod[1234]: change user 'sunil' password
+ *   Feb 22 16:30:00 hostname passwd[1234]: pam_unix(passwd:chauthtok): password changed for sunil
+ *   Feb 22 16:30:00 hostname groupadd[1234]: new group: name=newgroup, GID=1002
+ */
+function parseLinuxUserAccount(line: string): SecurityEvent | null {
+  // New user created
+  const useraddMatch = line.match(
+    /useradd\[\d+\]:\s+new\s+user:\s+name=(\S+)/,
+  );
+  if (useraddMatch) {
+    return event(
+      "critical",
+      "auth",
+      "User account created",
+      `New user account created: ${useraddMatch[1]}`,
+      { user: useraddMatch[1], type: "user_created" },
+    );
+  }
+
+  // User deleted
+  const userdelMatch = line.match(
+    /userdel\[\d+\]:\s+delete\s+user\s+'(\S+)'/,
+  );
+  if (userdelMatch) {
+    return event(
+      "high",
+      "auth",
+      "User account deleted",
+      `User account deleted: ${userdelMatch[1]}`,
+      { user: userdelMatch[1], type: "user_deleted" },
+    );
+  }
+
+  // Password changed via passwd command
+  const passwdMatch = line.match(
+    /passwd\[\d+\]:\s+pam_unix\(passwd:chauthtok\):\s+password\s+changed\s+for\s+(\S+)/,
+  );
+  if (passwdMatch) {
+    return event(
+      "high",
+      "auth",
+      "User password changed",
+      `Password changed for user: ${passwdMatch[1]}`,
+      { user: passwdMatch[1], type: "password_changed" },
+    );
+  }
+
+  // User modified (usermod)
+  const usermodMatch = line.match(
+    /usermod\[\d+\]:\s+change\s+user\s+'(\S+)'/,
+  );
+  if (usermodMatch) {
+    return event(
+      "high",
+      "auth",
+      "User account modified",
+      `User account modified: ${usermodMatch[1]}`,
+      { user: usermodMatch[1], type: "user_modified" },
+    );
+  }
+
+  // New group (often accompanies user creation)
+  const groupaddMatch = line.match(
+    /groupadd\[\d+\]:\s+new\s+group:\s+name=(\S+)/,
+  );
+  if (groupaddMatch) {
+    return event(
+      "medium",
+      "auth",
+      "Group created",
+      `New group created: ${groupaddMatch[1]}`,
+      { group: groupaddMatch[1], type: "group_created" },
+    );
+  }
+
+  return null;
+}
+
+/**
+ * Parse Linux remote desktop / VNC events.
+ * Lines from xrdp, vncserver, x11vnc:
+ *   Feb 22 16:30:00 hostname xrdp[1234]: connected client: 203.0.113.42
+ *   Feb 22 16:30:00 hostname xrdp-sesman[1234]: session started for user sunil
+ *   Feb 22 16:30:00 hostname x11vnc[1234]: Got connection from client 203.0.113.42
+ */
+function parseLinuxRemoteDesktop(line: string): SecurityEvent | null {
+  // xrdp client connection
+  const xrdpMatch = line.match(
+    /xrdp\[\d+\]:\s+.*?(?:connected|connection).*?(\d+\.\d+\.\d+\.\d+)/i,
+  );
+  if (xrdpMatch) {
+    return event(
+      "high",
+      "auth",
+      "RDP connection detected",
+      `RDP connection from ${xrdpMatch[1]}`,
+      { type: "rdp", host: xrdpMatch[1] },
+    );
+  }
+
+  // xrdp session started
+  const xrdpSessionMatch = line.match(
+    /xrdp-sesman\[\d+\]:\s+.*?session\s+started.*?user\s+(\S+)/i,
+  );
+  if (xrdpSessionMatch) {
+    return event(
+      "high",
+      "auth",
+      "RDP session started",
+      `RDP session started for user: ${xrdpSessionMatch[1]}`,
+      { type: "rdp_session", user: xrdpSessionMatch[1] },
+    );
+  }
+
+  // VNC connection (x11vnc, tigervnc, etc.)
+  const vncMatch = line.match(
+    /(?:x11vnc|vnc|Xvnc)\[\d+\]:\s+.*?(?:connection|connect).*?(\d+\.\d+\.\d+\.\d+)/i,
+  );
+  if (vncMatch) {
+    return event(
+      "high",
+      "auth",
+      "VNC connection detected",
+      `VNC connection from ${vncMatch[1]}`,
+      { type: "vnc", host: vncMatch[1] },
+    );
+  }
+
+  return null;
+}
+
+/**
  * Parse macOS /var/log/system.log lines for SSH events.
  * Lines look like:
  *   Feb 22 16:39:32 sunils-mac-mini sshd-session: sunil [priv][58912]: USER_PROCESS: 58916 ttys001
@@ -464,12 +642,33 @@ export class LogStreamWatcher {
   }
 
   private startLinux(): void {
-    this.process = spawn("journalctl", ["-f", "-u", "sshd", "-u", "ssh", "--no-pager", "-o", "short"], {
+    // Watch multiple systemd units for comprehensive monitoring:
+    // - sshd/ssh: SSH login/failure events
+    // - sudo: privilege escalation
+    // - systemd-logind: session events
+    // - xrdp/vnc: remote desktop access
+    // Also use SYSLOG_IDENTIFIER for useradd/userdel/usermod/passwd/groupadd
+    this.process = spawn("journalctl", [
+      "-f", "--no-pager", "-o", "short",
+      "-u", "sshd", "-u", "ssh",
+      "-u", "sudo",
+      "-u", "systemd-logind",
+      "-u", "xrdp", "-u", "xrdp-sesman",
+      // Catch useradd/userdel/passwd via syslog identifiers
+      "-t", "useradd", "-t", "userdel", "-t", "usermod", "-t", "passwd", "-t", "groupadd",
+      // VNC servers
+      "-t", "x11vnc", "-t", "Xvnc",
+    ], {
       stdio: ["ignore", "pipe", "ignore"],
     });
 
-    console.log("[sentinel] LogStreamWatcher started (Linux journalctl, SSH events)");
-    this.wireUp((line) => parseLinuxLogLine(line, this.knownHosts));
+    console.log("[sentinel] LogStreamWatcher started (Linux journalctl, SSH + sudo + user accounts + remote desktop)");
+    this.wireUp((line) => {
+      return parseLinuxLogLine(line, this.knownHosts)
+        ?? parseLinuxSudo(line)
+        ?? parseLinuxUserAccount(line)
+        ?? parseLinuxRemoteDesktop(line);
+    });
   }
 
   private wireUp(parser: (line: string) => SecurityEvent | null): void {

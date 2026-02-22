@@ -9,6 +9,11 @@
 - **Dual-source macOS SSH monitoring** — `/var/log/system.log` tail for successful logins + unified `log stream` for failed auth (PAM errors). Fixes broken unified-log-only approach (sshd doesn't emit auth events to unified logging on macOS).
 - **Expanded SSH failure patterns** — catches PAM auth errors, unknown users, invalid users, and failed keyboard-interactive attempts.
 - **Platform-aware osquery config** — macOS-specific tables (es_process_events, launchd, asl) vs Linux-specific (process_events, syslog, systemd_units, crontab).
+- **Linux parity for real-time monitoring**:
+  - sudo commands + PAM sessions via `journalctl -u sudo`
+  - User account changes via `useradd`/`userdel`/`usermod`/`passwd`/`groupadd` syslog identifiers
+  - RDP/VNC detection via `xrdp`/`xrdp-sesman`/`x11vnc`/`Xvnc` journal units
+  - All flow through the same analyzer → alert pipeline as macOS equivalents
 
 ### Fixed
 - **Alert delivery** — replaced non-existent `api.sendMessage()` with `openclaw message send` CLI.
