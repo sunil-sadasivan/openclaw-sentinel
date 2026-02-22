@@ -19,8 +19,11 @@
   },
   "files": [
     "dist/",
+    "skills/",
+    "launchd/",
+    "systemd/",
+    "scripts/",
     "openclaw.plugin.json",
-    "osquery.conf",
     "README.md"
   ],
   "keywords": [
