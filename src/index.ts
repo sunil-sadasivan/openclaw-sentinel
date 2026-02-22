@@ -25,6 +25,10 @@ import { shouldAlert, meetsThreshold, createAlertState } from "./alerts.js";
 import { EventStore } from "./persistence.js";
 import { ResultLogWatcher } from "./watcher.js";
 import type { OsqueryResultBatch } from "./watcher.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import {
   analyzeProcessEvents,
   analyzeLoginEvents,
@@ -172,14 +176,19 @@ export default function sentinel(api: any): void {
   const sentinelDir = pluginConfig.logPath ?? SENTINEL_DIR_DEFAULT;
 
   const sendAlert = async (text: string): Promise<void> => {
+    const channel = pluginConfig.alertChannel;
+    const to = pluginConfig.alertTo;
+    if (!channel || !to) {
+      console.error("[sentinel] Alert skipped: no alertChannel/alertTo configured");
+      return;
+    }
     try {
-      await api.sendMessage?.({
-        channel: pluginConfig.alertChannel,
-        to: pluginConfig.alertTo,
-        message: text,
-      });
-    } catch {
-      console.error("[sentinel] Alert delivery failed:", text);
+      // Use openclaw CLI for reliable message delivery
+      const args = ["message", "send", "--channel", channel, "--to", to, "--message", text];
+      await execFileAsync("openclaw", args, { timeout: 15_000 });
+      console.log(`[sentinel] Alert sent via ${channel} to ${to}`);
+    } catch (err: any) {
+      console.error("[sentinel] Alert delivery failed:", err?.message ?? err, text.slice(0, 200));
     }
   };
 
