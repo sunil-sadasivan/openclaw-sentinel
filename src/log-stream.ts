@@ -163,6 +163,35 @@ function parseMacOSSyslog(
     );
   }
 
+  // Match sudo from system.log
+  const sudoMatch = line.match(
+    /sudo\[(\d+)\]:\s+(\S+)\s*:\s*TTY=(\S+)\s*;\s*PWD=(\S+)\s*;\s*USER=(\S+)\s*;\s*COMMAND=(.*)/,
+  );
+  if (sudoMatch) {
+    const [, pid, user, tty, pwd, targetUser, command] = sudoMatch;
+    return event(
+      "medium",
+      "privilege",
+      "sudo command executed",
+      `${user} → ${targetUser}: ${command.trim()} (TTY ${tty}, PID ${pid})`,
+      { user, targetUser, command: command.trim(), tty, pwd, pid },
+    );
+  }
+
+  // Match sudo USER_PROCESS from system.log (macOS Sequoia format)
+  const sudoSessionMatch = line.match(
+    /sudo\[(\d+)\]:\s+USER_PROCESS/,
+  );
+  if (sudoSessionMatch) {
+    return event(
+      "info",
+      "privilege",
+      "sudo session started",
+      `sudo session started (PID ${sudoSessionMatch[1]})`,
+      { pid: sudoSessionMatch[1], source: "syslog" },
+    );
+  }
+
   return null;
 }
 
@@ -238,6 +267,101 @@ function parseMacOSAuthError(
   return null;
 }
 
+/**
+ * Parse screen sharing / VNC connection events.
+ */
+function parseScreenSharing(line: string): SecurityEvent | null {
+  // Authentication attempt
+  const authMatch = line.match(
+    /screensharingd.*?Authentication:\s+(.*)/,
+  );
+  if (authMatch) {
+    return event(
+      "high",
+      "auth",
+      "Screen sharing authentication",
+      `Screen sharing auth attempt: ${authMatch[1]}`,
+      { type: "screen_sharing", detail: authMatch[1] },
+    );
+  }
+
+  // VNC connection
+  const vncMatch = line.match(
+    /screensharingd.*?VNC.*?(\d+\.\d+\.\d+\.\d+)/,
+  );
+  if (vncMatch) {
+    return event(
+      "high",
+      "auth",
+      "VNC connection detected",
+      `VNC connection from ${vncMatch[1]}`,
+      { type: "vnc", host: vncMatch[1] },
+    );
+  }
+
+  // Client connection
+  const clientMatch = line.match(
+    /screensharingd.*?client\s+(\S+)\s+connected/i,
+  );
+  if (clientMatch) {
+    return event(
+      "high",
+      "auth",
+      "Screen sharing client connected",
+      `Screen sharing client connected: ${clientMatch[1]}`,
+      { type: "screen_sharing_client", client: clientMatch[1] },
+    );
+  }
+
+  return null;
+}
+
+/**
+ * Parse user account change events from opendirectoryd.
+ */
+function parseUserAccountChange(line: string): SecurityEvent | null {
+  const createdMatch = line.match(
+    /opendirectoryd.*?(?:user|record)\s+(\S+).*?created/i,
+  );
+  if (createdMatch) {
+    return event(
+      "critical",
+      "auth",
+      "User account created",
+      `New user account created: ${createdMatch[1]}`,
+      { user: createdMatch[1], type: "user_created" },
+    );
+  }
+
+  const deletedMatch = line.match(
+    /opendirectoryd.*?(?:user|record)\s+(\S+).*?deleted/i,
+  );
+  if (deletedMatch) {
+    return event(
+      "high",
+      "auth",
+      "User account deleted",
+      `User account deleted: ${deletedMatch[1]}`,
+      { user: deletedMatch[1], type: "user_deleted" },
+    );
+  }
+
+  const passwordMatch = line.match(
+    /opendirectoryd.*?(?:user|record)\s+(\S+).*?password\s+changed/i,
+  );
+  if (passwordMatch) {
+    return event(
+      "high",
+      "auth",
+      "User password changed",
+      `Password changed for user: ${passwordMatch[1]}`,
+      { user: passwordMatch[1], type: "password_changed" },
+    );
+  }
+
+  return null;
+}
+
 function isTailscaleIP(host: string): boolean {
   const octets = host.split(".").map(Number);
   return octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
@@ -285,9 +409,15 @@ export class LogStreamWatcher {
     console.log("[sentinel] LogStreamWatcher started (macOS system.log tail, SSH sessions)");
     this.wireUp((line) => parseMacOSSyslog(line, this.knownHosts));
 
-    // Source 2: log stream for failed auth attempts
-    const predicate =
-      'process == "sshd-session" AND (eventMessage CONTAINS "authentication error" OR eventMessage CONTAINS "unknown user" OR eventMessage CONTAINS "Invalid user" OR eventMessage CONTAINS "Failed")';
+    // Source 2: log stream for failed SSH auth + sudo + screen sharing + user account changes
+    const predicate = [
+      // SSH failed auth
+      '(process == "sshd-session" AND (eventMessage CONTAINS "authentication error" OR eventMessage CONTAINS "unknown user" OR eventMessage CONTAINS "Invalid user" OR eventMessage CONTAINS "Failed"))',
+      // Screen sharing connections
+      '(process == "screensharingd" AND (eventMessage CONTAINS "Authentication" OR eventMessage CONTAINS "client" OR eventMessage CONTAINS "VNC"))',
+      // User account changes (creation, deletion, modification)
+      '(process == "opendirectoryd" AND (eventMessage CONTAINS "created" OR eventMessage CONTAINS "deleted" OR eventMessage CONTAINS "password changed"))',
+    ].join(" OR ");
     this.syslogProcess = spawn("log", ["stream", "--predicate", predicate, "--style", "default", "--info"], {
       stdio: ["ignore", "pipe", "ignore"],
     });
@@ -296,10 +426,14 @@ export class LogStreamWatcher {
     if (this.syslogProcess.stdout) {
       const rl = createInterface({ input: this.syslogProcess.stdout });
       rl.on("line", (line) => {
-        const evt = parseMacOSAuthError(line, this.knownHosts);
+        const evt = parseMacOSAuthError(line, this.knownHosts)
+          ?? parseScreenSharing(line)
+          ?? parseUserAccountChange(line);
         if (evt) this.callback(evt);
       });
     }
+
+    console.log("[sentinel] LogStreamWatcher started (macOS log stream, auth + screen sharing + user accounts)");
 
     this.syslogProcess.on("exit", (code) => {
       console.log(`[sentinel] LogStream (unified log) exited (code ${code})`);
@@ -310,15 +444,20 @@ export class LogStreamWatcher {
   }
 
   private startMacOSUnifiedLog(): void {
-    const predicate =
-      'process == "sshd-session" AND (eventMessage CONTAINS "authentication error" OR eventMessage CONTAINS "unknown user" OR eventMessage CONTAINS "Invalid user" OR eventMessage CONTAINS "Failed")';
+    const predicate = [
+      '(process == "sshd-session" AND (eventMessage CONTAINS "authentication error" OR eventMessage CONTAINS "unknown user" OR eventMessage CONTAINS "Invalid user" OR eventMessage CONTAINS "Failed"))',
+      '(process == "screensharingd" AND (eventMessage CONTAINS "Authentication" OR eventMessage CONTAINS "client" OR eventMessage CONTAINS "VNC"))',
+      '(process == "opendirectoryd" AND (eventMessage CONTAINS "created" OR eventMessage CONTAINS "deleted" OR eventMessage CONTAINS "password changed"))',
+    ].join(" OR ");
     this.syslogProcess = spawn("log", ["stream", "--predicate", predicate, "--style", "default", "--info"], {
       stdio: ["ignore", "pipe", "ignore"],
     });
     if (this.syslogProcess.stdout) {
       const rl = createInterface({ input: this.syslogProcess.stdout });
       rl.on("line", (line) => {
-        const evt = parseMacOSAuthError(line, this.knownHosts);
+        const evt = parseMacOSAuthError(line, this.knownHosts)
+          ?? parseScreenSharing(line)
+          ?? parseUserAccountChange(line);
         if (evt) this.callback(evt);
       });
     }
