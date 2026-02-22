@@ -1,9 +1,10 @@
-FROM node:20-bookworm
+FROM node:20-slim
 
 # Install osquery
-RUN apt-get update && apt-get install -y wget gnupg2 && \
-    wget -qO - https://pkg.osquery.io/deb/pubkey.gpg | apt-key add - && \
-    echo "deb [arch=amd64] https://pkg.osquery.io/deb deb main" > /etc/apt/sources.list.d/osquery.list && \
+RUN apt-get update && \
+    apt-get install -y wget gnupg2 ca-certificates && \
+    wget -qO - https://pkg.osquery.io/deb/pubkey.gpg | gpg --dearmor -o /usr/share/keyrings/osquery-archive-keyring.gpg && \
+    echo "deb [arch=arm64 signed-by=/usr/share/keyrings/osquery-archive-keyring.gpg] https://pkg.osquery.io/deb deb main" > /etc/apt/sources.list.d/osquery.list && \
     apt-get update && apt-get install -y osquery && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
@@ -24,11 +25,11 @@ RUN npm install && npm run build
 # Create sentinel directories
 RUN mkdir -p /root/.openclaw/sentinel/config /root/.openclaw/sentinel/db /root/.openclaw/sentinel/logs/osquery
 
-# Generate osquery config from our source
-RUN node -e " \
-  import('file:///app/dist/osquery.js').then(m => { \
-    const config = m.generateOsqueryConfig({}); \
-    process.stdout.write(JSON.stringify(config, null, 2)); \
-  });" > /root/.openclaw/sentinel/config/osquery.conf
+# Generate platform-aware osquery config
+RUN node --input-type=module -e " \
+  import { generateOsqueryConfig } from './dist/osquery.js'; \
+  import { writeFileSync } from 'fs'; \
+  const config = generateOsqueryConfig({}); \
+  writeFileSync('/root/.openclaw/sentinel/config/osquery.conf', JSON.stringify(config, null, 2));"
 
 CMD ["bash"]
