@@ -157,9 +157,9 @@ function parseLinuxSudo(line: string): SecurityEvent | null {
  *   Feb 22 16:30:00 hostname groupadd[1234]: new group: name=newgroup, GID=1002
  */
 function parseLinuxUserAccount(line: string): SecurityEvent | null {
-  // New user created
+  // New user created (name field ends with comma in useradd output)
   const useraddMatch = line.match(
-    /useradd\[\d+\]:\s+new\s+user:\s+name=(\S+)/,
+    /useradd\[\d+\]:\s+new\s+user:\s+name=([^,\s]+)/,
   );
   if (useraddMatch) {
     return event(
@@ -215,7 +215,7 @@ function parseLinuxUserAccount(line: string): SecurityEvent | null {
 
   // New group (often accompanies user creation)
   const groupaddMatch = line.match(
-    /groupadd\[\d+\]:\s+new\s+group:\s+name=(\S+)/,
+    /groupadd\[\d+\]:\s+new\s+group:\s+name=([^,\s]+)/,
   );
   if (groupaddMatch) {
     return event(
@@ -599,8 +599,6 @@ export class LogStreamWatcher {
     this.syslogProcess = spawn("log", ["stream", "--predicate", predicate, "--style", "default", "--info"], {
       stdio: ["ignore", "pipe", "ignore"],
     });
-    console.log("[sentinel] LogStreamWatcher started (macOS log stream, failed auth)");
-
     if (this.syslogProcess.stdout) {
       const rl = createInterface({ input: this.syslogProcess.stdout });
       rl.on("line", (line) => {

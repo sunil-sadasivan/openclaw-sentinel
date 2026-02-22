@@ -160,12 +160,12 @@ describe("Linux sudo log patterns", () => {
 });
 
 describe("Linux user account log patterns", () => {
-  it("matches useradd new user", () => {
+  it("matches useradd new user (strips trailing comma)", () => {
     const line =
       "Feb 22 16:30:00 myhost useradd[1234]: new user: name=backdoor, UID=1001, GID=1001, home=/home/backdoor, shell=/bin/bash";
-    const match = line.match(/useradd\[\d+\]:\s+new\s+user:\s+name=(\S+)/);
+    const match = line.match(/useradd\[\d+\]:\s+new\s+user:\s+name=([^,\s]+)/);
     assert.ok(match);
-    assert.equal(match[1], "backdoor,");
+    assert.equal(match[1], "backdoor");
   });
 
   it("matches userdel delete user", () => {
@@ -192,12 +192,12 @@ describe("Linux user account log patterns", () => {
     assert.equal(match[1], "sunil");
   });
 
-  it("matches groupadd new group", () => {
+  it("matches groupadd new group (strips trailing comma)", () => {
     const line =
       "Feb 22 16:30:00 myhost groupadd[1234]: new group: name=newgroup, GID=1002";
-    const match = line.match(/groupadd\[\d+\]:\s+new\s+group:\s+name=(\S+)/);
+    const match = line.match(/groupadd\[\d+\]:\s+new\s+group:\s+name=([^,\s]+)/);
     assert.ok(match);
-    assert.equal(match[1], "newgroup,");
+    assert.equal(match[1], "newgroup");
   });
 });
 
