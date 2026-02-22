@@ -130,16 +130,28 @@ export function analyzeLoginEvents(
     if (!host || host === "localhost" || host === "::1" || host === "127.0.0.1")
       continue;
 
-    // Skip Tailscale CGNAT range (100.64.0.0/10)
+    // Check if Tailscale CGNAT range (100.64.0.0/10)
     const octets = host.split(".").map(Number);
-    if (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127) continue;
+    const isTailscale =
+      octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
 
-    // New remote login from unknown host
-    if (!knownHosts.has(host)) {
+    if (isTailscale || knownHosts.has(host)) {
+      // Known host / Tailscale login — info-level awareness
+      events.push(
+        event(
+          "info",
+          "ssh_login",
+          "SSH login detected",
+          `User "${user}" logged in from ${isTailscale ? "Tailscale" : "known"} host: ${host}\nLogin type: ${type}`,
+          { user, host, type, tailscale: isTailscale },
+        ),
+      );
+    } else {
+      // Unknown host — high severity
       events.push(
         event(
           "high",
-          "auth",
+          "ssh_login",
           "SSH login from unknown host",
           `User "${user}" logged in from unknown host: ${host}\nLogin type: ${type}`,
           { user, host, type },

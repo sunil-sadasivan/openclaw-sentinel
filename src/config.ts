@@ -69,7 +69,7 @@ export interface SecurityEvent {
   id: string;
   timestamp: number;
   severity: Severity;
-  category: "process" | "network" | "file" | "auth" | "privilege";
+  category: "process" | "network" | "file" | "auth" | "privilege" | "ssh_login";
   title: string;
   description: string;
   details: Record<string, unknown>;
