@@ -184,7 +184,7 @@ export default function sentinel(api: any): void {
     }
     try {
       // Use openclaw CLI for reliable message delivery
-      const args = ["message", "send", "--channel", channel, "--to", to, "--message", text];
+      const args = ["message", "send", "--channel", channel, "--target", to, "--message", text];
       await execFileAsync("openclaw", args, { timeout: 15_000 });
       console.log(`[sentinel] Alert sent via ${channel} to ${to}`);
     } catch (err: any) {
