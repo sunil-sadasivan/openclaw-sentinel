@@ -166,6 +166,31 @@ function parseMacOSSyslog(
   return null;
 }
 
+/**
+ * Parse macOS unified log lines for PAM authentication errors.
+ * Line format:
+ *   2026-02-22 16:56:51.705020-0500  0x14e5ecb  Default  0x0  62761  0  sshd-session: error: PAM: authentication error for sunil from 100.79.207.74
+ */
+function parseMacOSAuthError(
+  line: string,
+  _knownHosts: Set<string>,
+): SecurityEvent | null {
+  const authMatch = line.match(
+    /sshd-session.*?PAM:\s+authentication\s+error\s+for\s+(\S+)\s+from\s+(\S+)/,
+  );
+  if (authMatch) {
+    const [, user, host] = authMatch;
+    return event(
+      "high",
+      "ssh_login",
+      "SSH failed authentication",
+      `Failed authentication (PAM) for "${user}" from ${host}`,
+      { user, host, type: "pam_auth_error" },
+    );
+  }
+  return null;
+}
+
 function isTailscaleIP(host: string): boolean {
   const octets = host.split(".").map(Number);
   return octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
@@ -199,16 +224,57 @@ export class LogStreamWatcher {
     }
   }
 
+  private syslogProcess: ChildProcess | null = null;
+
   private startMacOS(): void {
-    // On modern macOS (Sequoia+), sshd logs to /var/log/system.log as
-    // "sshd-session" with USER_PROCESS/DEAD_PROCESS entries, not to unified log.
-    // We tail system.log for real-time SSH detection.
+    // Two sources on modern macOS:
+    // 1. /var/log/system.log — successful SSH sessions (sshd-session USER_PROCESS)
+    // 2. unified log stream — failed auth (PAM errors from sshd-session)
+
+    // Source 1: tail system.log for successful logins
     this.process = spawn("tail", ["-F", "-n", "0", "/var/log/system.log"], {
       stdio: ["ignore", "pipe", "ignore"],
     });
-
-    console.log("[sentinel] LogStreamWatcher started (macOS /var/log/system.log tail, SSH events)");
+    console.log("[sentinel] LogStreamWatcher started (macOS system.log tail, SSH sessions)");
     this.wireUp((line) => parseMacOSSyslog(line, this.knownHosts));
+
+    // Source 2: log stream for failed auth attempts
+    const predicate =
+      'process == "sshd-session" AND eventMessage CONTAINS "authentication error"';
+    this.syslogProcess = spawn("log", ["stream", "--predicate", predicate, "--style", "default", "--info"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    console.log("[sentinel] LogStreamWatcher started (macOS log stream, failed auth)");
+
+    if (this.syslogProcess.stdout) {
+      const rl = createInterface({ input: this.syslogProcess.stdout });
+      rl.on("line", (line) => {
+        const evt = parseMacOSAuthError(line, this.knownHosts);
+        if (evt) this.callback(evt);
+      });
+    }
+
+    this.syslogProcess.on("exit", (code) => {
+      console.log(`[sentinel] LogStream (unified log) exited (code ${code})`);
+      if (this.running) {
+        setTimeout(() => this.startMacOSUnifiedLog(), 5000);
+      }
+    });
+  }
+
+  private startMacOSUnifiedLog(): void {
+    const predicate =
+      'process == "sshd-session" AND eventMessage CONTAINS "authentication error"';
+    this.syslogProcess = spawn("log", ["stream", "--predicate", predicate, "--style", "default", "--info"], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (this.syslogProcess.stdout) {
+      const rl = createInterface({ input: this.syslogProcess.stdout });
+      rl.on("line", (line) => {
+        const evt = parseMacOSAuthError(line, this.knownHosts);
+        if (evt) this.callback(evt);
+      });
+    }
   }
 
   private startLinux(): void {
@@ -254,6 +320,10 @@ export class LogStreamWatcher {
     if (this.process) {
       this.process.kill("SIGTERM");
       this.process = null;
+    }
+    if (this.syslogProcess) {
+      this.syslogProcess.kill("SIGTERM");
+      this.syslogProcess = null;
     }
   }
 
