@@ -1,0 +1,34 @@
+FROM node:20-bookworm
+
+# Install osquery
+RUN apt-get update && apt-get install -y wget gnupg2 && \
+    wget -qO - https://pkg.osquery.io/deb/pubkey.gpg | apt-key add - && \
+    echo "deb [arch=amd64] https://pkg.osquery.io/deb deb main" > /etc/apt/sources.list.d/osquery.list && \
+    apt-get update && apt-get install -y osquery && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy plugin source
+COPY package.json package-lock.json* tsconfig.json ./
+COPY src/ src/
+COPY skills/ skills/
+COPY scripts/ scripts/
+COPY launchd/ launchd/
+COPY systemd/ systemd/
+COPY openclaw.plugin.json ./
+
+# Install deps and build
+RUN npm install && npm run build
+
+# Create sentinel directories
+RUN mkdir -p /root/.openclaw/sentinel/config /root/.openclaw/sentinel/db /root/.openclaw/sentinel/logs/osquery
+
+# Generate osquery config from our source
+RUN node -e " \
+  import('file:///app/dist/osquery.js').then(m => { \
+    const config = m.generateOsqueryConfig({}); \
+    process.stdout.write(JSON.stringify(config, null, 2)); \
+  });" > /root/.openclaw/sentinel/config/osquery.conf
+
+CMD ["bash"]
