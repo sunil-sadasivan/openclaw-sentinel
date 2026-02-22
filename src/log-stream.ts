@@ -175,6 +175,7 @@ function parseMacOSAuthError(
   line: string,
   _knownHosts: Set<string>,
 ): SecurityEvent | null {
+  // PAM authentication error (valid user, wrong password)
   const authMatch = line.match(
     /sshd-session.*?PAM:\s+authentication\s+error\s+for\s+(\S+)\s+from\s+(\S+)/,
   );
@@ -188,6 +189,52 @@ function parseMacOSAuthError(
       { user, host, type: "pam_auth_error" },
     );
   }
+
+  // PAM unknown user (invalid username)
+  const unknownMatch = line.match(
+    /sshd-session.*?PAM:\s+unknown\s+user\s+for\s+illegal\s+user\s+(\S+)\s+from\s+(\S+)/,
+  );
+  if (unknownMatch) {
+    const [, user, host] = unknownMatch;
+    return event(
+      "high",
+      "ssh_login",
+      "SSH invalid user attempt",
+      `Unknown user "${user}" attempted login from ${host}`,
+      { user, host, type: "unknown_user" },
+    );
+  }
+
+  // Invalid user line
+  const invalidMatch = line.match(
+    /sshd-session.*?Invalid\s+user\s+(\S+)\s+from\s+(\S+)\s+port\s+(\d+)/,
+  );
+  if (invalidMatch) {
+    const [, user, host, port] = invalidMatch;
+    return event(
+      "high",
+      "ssh_login",
+      "SSH invalid user attempt",
+      `Invalid user "${user}" from ${host}:${port}`,
+      { user, host, port, type: "invalid_user" },
+    );
+  }
+
+  // Failed keyboard-interactive/pam
+  const failedMatch = line.match(
+    /sshd-session.*?Failed\s+\S+\s+for\s+(?:invalid\s+user\s+)?(\S+)\s+from\s+(\S+)\s+port\s+(\d+)/,
+  );
+  if (failedMatch) {
+    const [, user, host, port] = failedMatch;
+    return event(
+      "high",
+      "ssh_login",
+      "SSH failed authentication",
+      `Failed login for "${user}" from ${host}:${port}`,
+      { user, host, port, type: "failed_auth" },
+    );
+  }
+
   return null;
 }
 
@@ -240,7 +287,7 @@ export class LogStreamWatcher {
 
     // Source 2: log stream for failed auth attempts
     const predicate =
-      'process == "sshd-session" AND eventMessage CONTAINS "authentication error"';
+      'process == "sshd-session" AND (eventMessage CONTAINS "authentication error" OR eventMessage CONTAINS "unknown user" OR eventMessage CONTAINS "Invalid user" OR eventMessage CONTAINS "Failed")';
     this.syslogProcess = spawn("log", ["stream", "--predicate", predicate, "--style", "default", "--info"], {
       stdio: ["ignore", "pipe", "ignore"],
     });
@@ -264,7 +311,7 @@ export class LogStreamWatcher {
 
   private startMacOSUnifiedLog(): void {
     const predicate =
-      'process == "sshd-session" AND eventMessage CONTAINS "authentication error"';
+      'process == "sshd-session" AND (eventMessage CONTAINS "authentication error" OR eventMessage CONTAINS "unknown user" OR eventMessage CONTAINS "Invalid user" OR eventMessage CONTAINS "Failed")';
     this.syslogProcess = spawn("log", ["stream", "--predicate", predicate, "--style", "default", "--info"], {
       stdio: ["ignore", "pipe", "ignore"],
     });
