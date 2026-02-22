@@ -1,6 +1,8 @@
 # 🛡️ OpenClaw Sentinel
 
-Real-time endpoint security monitoring plugin for [OpenClaw](https://github.com/openclaw/openclaw). Uses [osquery](https://osquery.io) to detect threats and alerts you via Signal, Slack, or any configured channel.
+OpenClaw agents run with elevated privileges on your machine — shell access, file operations, network connections. Sentinel continuously monitors for unauthorized access, suspicious processes, privilege escalation, and system anomalies, alerting you in real-time through any OpenClaw channel.
+
+A security monitoring plugin for [OpenClaw](https://github.com/openclaw/openclaw), powered by [osquery](https://osquery.io).
 
 ## What it does
 
