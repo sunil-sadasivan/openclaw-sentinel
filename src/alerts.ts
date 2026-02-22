@@ -42,11 +42,18 @@ export function shouldAlert(
     return false;
   }
 
-  // Dedup: same title within window
-  const isDupe = alertState.recentAlerts.some(
-    (a) => a.title === evt.title && now - a.time < ALERT_DEDUP_WINDOW_MS,
-  );
-  if (isDupe) return false;
+  // Skip dedup for failed auth — every attempt matters
+  const skipDedup =
+    evt.category === "ssh_login" &&
+    (evt.title.includes("failed") || evt.title.includes("Failed") || evt.title.includes("invalid") || evt.title.includes("Invalid"));
+
+  if (!skipDedup) {
+    // Dedup: same title within window
+    const isDupe = alertState.recentAlerts.some(
+      (a) => a.title === evt.title && now - a.time < ALERT_DEDUP_WINDOW_MS,
+    );
+    if (isDupe) return false;
+  }
 
   alertState.recentAlerts.push({ time: now, title: evt.title });
   return true;
