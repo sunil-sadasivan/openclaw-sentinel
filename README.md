@@ -38,7 +38,12 @@ Sentinel **does not** run osqueryd itself (it requires root). You start osqueryd
 
 ### Install osquery
 
-**macOS:**
+**macOS (Homebrew):**
+```bash
+brew install --cask osquery
+```
+
+**macOS (manual):**
 ```bash
 # Download the official .pkg from https://osquery.io/downloads
 ```
