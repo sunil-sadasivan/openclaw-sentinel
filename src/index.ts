@@ -26,6 +26,7 @@ import { EventStore } from "./persistence.js";
 import { ResultLogWatcher } from "./watcher.js";
 import type { OsqueryResultBatch } from "./watcher.js";
 import { LogStreamWatcher } from "./log-stream.js";
+import { SuppressionStore } from "./suppressions.js";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -53,6 +54,7 @@ const MAX_EVENT_LOG = 1000;
 const SENTINEL_DIR_DEFAULT = join(homedir(), ".openclaw", "sentinel");
 const alertRateState = createAlertState();
 let eventStore: EventStore | null = null;
+let suppressionStore: SuppressionStore | null = null;
 
 function logEvent(evt: SecurityEvent): void {
   state.eventLog.push(evt);
@@ -155,9 +157,14 @@ function handleResult(
     logEvent(evt);
 
     if (meetsThreshold(evt.severity, config.alertSeverity) && shouldAlert(evt, alertRateState)) {
-      sendAlert(formatAlert(evt)).catch((err) => {
-        console.error("[sentinel] alert failed:", err);
-      });
+      const suppressed = suppressionStore?.isSuppressed(evt);
+      if (suppressed) {
+        console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
+      } else {
+        sendAlert(formatAlert(evt)).catch((err) => {
+          console.error("[sentinel] alert failed:", err);
+        });
+      }
     }
   }
 
@@ -362,6 +369,146 @@ export default function sentinel(api: any): void {
     },
   });
 
+  // ── Agent tool: sentinel_suppress ──
+  api.registerTool({
+    name: "sentinel_suppress",
+    description:
+      "Manage alert suppression rules. Actions: 'add' (create a suppression), 'list' (show all), 'remove' (delete by id), 'cleanup' (remove expired). " +
+      "Scopes: 'title' (suppress all alerts with this title), 'category' (suppress entire category like ssh_login/privilege/auth), " +
+      "'field' (suppress when a specific detail field matches, e.g. field=user fieldValue=sunil), 'exact' (suppress only this exact title+description). " +
+      "Always explain to the user what will be suppressed before adding a rule.",
+    parameters: Type.Object({
+      action: Type.Union([
+        Type.Literal("add"),
+        Type.Literal("list"),
+        Type.Literal("remove"),
+        Type.Literal("cleanup"),
+      ]),
+      scope: Type.Optional(Type.Union([
+        Type.Literal("exact"),
+        Type.Literal("title"),
+        Type.Literal("category"),
+        Type.Literal("field"),
+      ])),
+      title: Type.Optional(Type.String({ description: "Event title to match (for scope=title or scope=exact)" })),
+      category: Type.Optional(Type.String({ description: "Event category to match (for scope=category): process, network, file, auth, privilege, ssh_login" })),
+      description: Type.Optional(Type.String({ description: "Event description to match (for scope=exact)" })),
+      field: Type.Optional(Type.String({ description: "Detail field name to match (for scope=field)" })),
+      fieldValue: Type.Optional(Type.String({ description: "Detail field value to match (for scope=field)" })),
+      reason: Type.Optional(Type.String({ description: "Human-readable reason for this suppression" })),
+      expiresIn: Type.Optional(Type.String({ description: "Expiry duration: '1h', '1d', '7d', '30d', or 'never'" })),
+      id: Type.Optional(Type.String({ description: "Suppression rule ID (for remove action)" })),
+    }),
+    async execute(
+      _id: string,
+      params: {
+        action: "add" | "list" | "remove" | "cleanup";
+        scope?: "exact" | "title" | "category" | "field";
+        title?: string;
+        category?: string;
+        description?: string;
+        field?: string;
+        fieldValue?: string;
+        reason?: string;
+        expiresIn?: string;
+        id?: string;
+      },
+    ) {
+      if (!suppressionStore) {
+        return { content: [{ type: "text", text: "Suppression store not initialized." }] };
+      }
+
+      switch (params.action) {
+        case "list": {
+          const rules = await suppressionStore.list();
+          if (rules.length === 0) {
+            return { content: [{ type: "text", text: "No suppression rules configured." }] };
+          }
+          const lines = rules.map((r) => {
+            const expired = (r as any)._expired ? " [EXPIRED]" : "";
+            const count = r.suppressCount > 0 ? ` (suppressed ${r.suppressCount}x, last: ${new Date(r.lastSuppressedAt!).toLocaleString()})` : " (never triggered)";
+            return `- **${r.id}**${expired}: ${SuppressionStore.describe(r)}${count}\n  Reason: ${r.reason}\n  Created: ${new Date(r.createdAt).toLocaleString()}${r.expiresAt ? `\n  Expires: ${new Date(r.expiresAt).toLocaleString()}` : ""}`;
+          });
+          return { content: [{ type: "text", text: `**Suppression Rules (${rules.length}):**\n\n${lines.join("\n\n")}` }] };
+        }
+
+        case "add": {
+          if (!params.scope) {
+            return { content: [{ type: "text", text: "Missing required parameter: scope (exact, title, category, or field)" }] };
+          }
+          if (!params.reason) {
+            return { content: [{ type: "text", text: "Missing required parameter: reason (explain why this is being suppressed)" }] };
+          }
+
+          // Validate scope-specific params
+          if (params.scope === "title" && !params.title) {
+            return { content: [{ type: "text", text: "scope=title requires the 'title' parameter" }] };
+          }
+          if (params.scope === "category" && !params.category) {
+            return { content: [{ type: "text", text: "scope=category requires the 'category' parameter" }] };
+          }
+          if (params.scope === "field" && (!params.field || !params.fieldValue)) {
+            return { content: [{ type: "text", text: "scope=field requires both 'field' and 'fieldValue' parameters" }] };
+          }
+          if (params.scope === "exact" && !params.title) {
+            return { content: [{ type: "text", text: "scope=exact requires the 'title' parameter" }] };
+          }
+
+          // Parse expiry
+          let expiresAt: number | null = null;
+          if (params.expiresIn && params.expiresIn !== "never") {
+            const match = params.expiresIn.match(/^(\d+)(h|d)$/);
+            if (match) {
+              const amount = parseInt(match[1], 10);
+              const unit = match[2] === "h" ? 3600_000 : 86400_000;
+              expiresAt = Date.now() + amount * unit;
+            }
+          }
+
+          const rule = await suppressionStore.add({
+            scope: params.scope,
+            title: params.title,
+            category: params.category,
+            description: params.description,
+            field: params.field,
+            fieldValue: params.fieldValue,
+            reason: params.reason,
+            expiresAt,
+          });
+
+          console.log(`[sentinel] Suppression added: ${rule.id} — ${SuppressionStore.describe(rule)}`);
+
+          return {
+            content: [{
+              type: "text",
+              text: `✅ Suppression rule added:\n\n- **ID:** ${rule.id}\n- **Matches:** ${SuppressionStore.describe(rule)}\n- **Reason:** ${rule.reason}\n- **Expires:** ${rule.expiresAt ? new Date(rule.expiresAt).toLocaleString() : "Never"}`,
+            }],
+          };
+        }
+
+        case "remove": {
+          if (!params.id) {
+            return { content: [{ type: "text", text: "Missing required parameter: id (use 'list' to see rule IDs)" }] };
+          }
+          const removed = await suppressionStore.remove(params.id);
+          if (removed) {
+            console.log(`[sentinel] Suppression removed: ${params.id}`);
+            return { content: [{ type: "text", text: `✅ Suppression rule ${params.id} removed.` }] };
+          }
+          return { content: [{ type: "text", text: `❌ No rule found with ID: ${params.id}` }] };
+        }
+
+        case "cleanup": {
+          const count = await suppressionStore.cleanup();
+          return { content: [{ type: "text", text: count > 0 ? `Cleaned up ${count} expired rules.` : "No expired rules to clean up." }] };
+        }
+
+        default:
+          return { content: [{ type: "text", text: `Unknown action: ${params.action}` }] };
+      }
+    },
+  });
+
   // ── Cleanup on process exit ──
   const cleanup = () => {
     if (watcher) {
@@ -402,6 +549,12 @@ export default function sentinel(api: any): void {
 
       // 0. Initialize event store and load persisted events
       eventStore = new EventStore(sentinelDir);
+      suppressionStore = new SuppressionStore(sentinelDir);
+      await suppressionStore.load();
+      const suppressions = await suppressionStore.list();
+      if (suppressions.length > 0) {
+        console.log(`[sentinel] Loaded ${suppressions.length} suppression rules`);
+      }
       const persisted = await eventStore.loadRecent(MAX_EVENT_LOG);
       if (persisted.length > 0) {
         state.eventLog = persisted;
@@ -456,9 +609,14 @@ export default function sentinel(api: any): void {
             meetsThreshold(evt.severity, pluginConfig.alertSeverity) &&
             shouldAlert(evt, alertRateState)
           ) {
-            sendAlert(formatAlert(evt)).catch((err) => {
-              console.error("[sentinel] alert failed:", err);
-            });
+            const suppressed = suppressionStore?.isSuppressed(evt);
+            if (suppressed) {
+              console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
+            } else {
+              sendAlert(formatAlert(evt)).catch((err) => {
+                console.error("[sentinel] alert failed:", err);
+              });
+            }
           }
           console.log(
             `[sentinel] [real-time] ${evt.severity}/${evt.category}: ${evt.title}`,
