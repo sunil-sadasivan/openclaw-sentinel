@@ -640,33 +640,74 @@ export class LogStreamWatcher {
   }
 
   private startLinux(): void {
-    // Watch multiple systemd units for comprehensive monitoring:
-    // - sshd/ssh: SSH login/failure events
-    // - sudo: privilege escalation
-    // - systemd-logind: session events
-    // - xrdp/vnc: remote desktop access
-    // Also use SYSLOG_IDENTIFIER for useradd/userdel/usermod/passwd/groupadd
+    // Stream 1: systemd unit-based events (SSH, sudo, remote desktop, login)
+    // journalctl -u filters match _SYSTEMD_UNIT field
     this.process = spawn("journalctl", [
       "-f", "--no-pager", "-o", "short",
       "-u", "sshd", "-u", "ssh",
       "-u", "sudo",
       "-u", "systemd-logind",
       "-u", "xrdp", "-u", "xrdp-sesman",
-      // Catch useradd/userdel/passwd via syslog identifiers
-      "-t", "useradd", "-t", "userdel", "-t", "usermod", "-t", "passwd", "-t", "groupadd",
-      // VNC servers
+    ], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+
+    console.log("[sentinel] LogStreamWatcher started (Linux journalctl units, SSH + sudo + remote desktop)");
+    this.wireUp((line) => {
+      return parseLinuxLogLine(line, this.knownHosts)
+        ?? parseLinuxSudo(line)
+        ?? parseLinuxRemoteDesktop(line);
+    });
+
+    // Stream 2: syslog identifier-based events (user account changes, VNC)
+    // These tools (useradd, userdel, etc.) log via syslog, not systemd units
+    // Must be a separate stream — mixing -u and -t in one journalctl uses OR
+    // across all, but some distros behave differently
+    this.syslogProcess = spawn("journalctl", [
+      "-f", "--no-pager", "-o", "short",
+      "-t", "useradd", "-t", "userdel", "-t", "usermod",
+      "-t", "passwd", "-t", "groupadd",
       "-t", "x11vnc", "-t", "Xvnc",
     ], {
       stdio: ["ignore", "pipe", "ignore"],
     });
 
-    console.log("[sentinel] LogStreamWatcher started (Linux journalctl, SSH + sudo + user accounts + remote desktop)");
-    this.wireUp((line) => {
-      return parseLinuxLogLine(line, this.knownHosts)
-        ?? parseLinuxSudo(line)
-        ?? parseLinuxUserAccount(line)
-        ?? parseLinuxRemoteDesktop(line);
+    if (this.syslogProcess.stdout) {
+      const rl = createInterface({ input: this.syslogProcess.stdout });
+      rl.on("line", (line) => {
+        const evt = parseLinuxUserAccount(line)
+          ?? parseLinuxRemoteDesktop(line);
+        if (evt) this.callback(evt);
+      });
+    }
+
+    console.log("[sentinel] LogStreamWatcher started (Linux journalctl identifiers, user accounts + VNC)");
+
+    this.syslogProcess.on("exit", (code) => {
+      console.log(`[sentinel] LogStream (Linux identifiers) exited (code ${code})`);
+      if (this.running) {
+        setTimeout(() => this.startLinuxIdentifierStream(), 5000);
+      }
     });
+  }
+
+  private startLinuxIdentifierStream(): void {
+    this.syslogProcess = spawn("journalctl", [
+      "-f", "--no-pager", "-o", "short",
+      "-t", "useradd", "-t", "userdel", "-t", "usermod",
+      "-t", "passwd", "-t", "groupadd",
+      "-t", "x11vnc", "-t", "Xvnc",
+    ], {
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (this.syslogProcess.stdout) {
+      const rl = createInterface({ input: this.syslogProcess.stdout });
+      rl.on("line", (line) => {
+        const evt = parseLinuxUserAccount(line)
+          ?? parseLinuxRemoteDesktop(line);
+        if (evt) this.callback(evt);
+      });
+    }
   }
 
   private wireUp(parser: (line: string) => SecurityEvent | null): void {
