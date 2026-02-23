@@ -254,6 +254,14 @@ export default function sentinel(api: any): void {
     "curl_certificate", // TLS connections
   ];
 
+  // osqueryi meta-commands that could execute shell commands or exfiltrate data
+  const BLOCKED_PATTERNS = [
+    /^\s*\./,                    // Any dot-command (.shell, .output, .read, .mode, etc.)
+    /;\s*\./,                    // Dot-command after semicolon
+    /ATTACH\s/i,                 // ATTACH database
+    /LOAD\s/i,                   // Load extension
+  ];
+
   api.registerTool({
     name: "sentinel_query",
     description:
@@ -263,6 +271,19 @@ export default function sentinel(api: any): void {
       sql: Type.String({ description: "osquery SQL query" }),
     }),
     async execute(_id: string, params: { sql: string }) {
+      // Safety: block meta-commands that could execute shell commands or exfiltrate data
+      const blockedPattern = BLOCKED_PATTERNS.find((p) => p.test(params.sql));
+      if (blockedPattern) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Blocked: osquery meta-commands and dangerous statements are not allowed for security reasons.`,
+            },
+          ],
+        };
+      }
+
       // Safety: block dangerous tables
       const sqlLower = params.sql.toLowerCase();
       const blocked = BLOCKED_TABLES.find((t) => sqlLower.includes(t));
