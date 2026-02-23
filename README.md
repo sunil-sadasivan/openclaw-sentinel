@@ -66,8 +66,45 @@ sudo yum install osquery
 
 ## Installation
 
+### From npm (recommended)
+
 ```bash
-openclaw plugins install openclaw-sentinel
+npm install -g openclaw-sentinel
+```
+
+Then add the plugin to your `~/.openclaw/openclaw.json`:
+
+```json
+{
+  "plugins": {
+    "entries": {
+      "sentinel": {
+        "enabled": true,
+        "module": "openclaw-sentinel",
+        "config": {
+          "alertChannel": "signal",
+          "alertTo": "+1234567890",
+          "alertSeverity": "high"
+        }
+      }
+    }
+  }
+}
+```
+
+Restart your gateway:
+
+```bash
+openclaw gateway restart
+```
+
+### From source (development)
+
+```bash
+git clone https://github.com/sunil-sadasivan/openclaw-sentinel.git
+cd openclaw-sentinel
+npm install && npm run build
+openclaw plugins install .
 openclaw gateway restart
 ```
 
@@ -296,10 +333,7 @@ cd openclaw-sentinel
 npm install
 npm run build          # Compile TypeScript
 npm run dev            # Watch mode
-
-# Install locally for testing
-openclaw plugins install .
-openclaw gateway restart
+npm test               # Run tests (60 tests)
 ```
 
 ## Project structure
