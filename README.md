@@ -2,7 +2,7 @@
 
 OpenClaw agents run with elevated privileges on your machine — shell access, file operations, network connections. Sentinel continuously monitors for unauthorized access, suspicious processes, privilege escalation, and system anomalies, alerting you in real-time through any OpenClaw channel.
 
-A security monitoring plugin for [OpenClaw](https://github.com/openclaw/openclaw), powered by [osquery](https://osquery.io).
+A security monitoring plugin for [OpenClaw](https://github.com/openclaw/openclaw), powered by [osquery](https://github.com/osquery/osquery).
 
 ## What it does
 
@@ -33,7 +33,7 @@ Sentinel **does not** run osqueryd itself (it requires root). You start osqueryd
 ## Prerequisites
 
 - **macOS** (Apple Silicon or Intel) or **Linux** (systemd-based)
-- [osquery](https://osquery.io) installed
+- [osquery](https://github.com/osquery/osquery) installed
 - [OpenClaw](https://github.com/openclaw/openclaw) running
 
 ### Install osquery
