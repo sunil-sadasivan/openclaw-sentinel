@@ -13,6 +13,7 @@
     "prepublishOnly": "npm run build"
   },
   "openclaw": {
+    "id": "sentinel",
     "extensions": [
       "./dist/index.js"
     ]
