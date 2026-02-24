@@ -1,6 +1,6 @@
 {
   "name": "openclaw-sentinel",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Real-time endpoint security monitoring plugin for OpenClaw",
   "type": "module",
   "main": "dist/index.js",

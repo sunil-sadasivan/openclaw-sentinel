@@ -138,17 +138,24 @@ Context: This machine runs OpenClaw (an AI assistant platform) which frequently 
 Reply with ONLY a single short sentence (under 30 words) giving your honest take on whether this is a real problem or likely benign. Be direct, opinionated, and useful — like a senior engineer glancing at an alert. No preamble.`;
 
   try {
-    const { stdout } = await execFileAsync("openclaw", ["agent", "--message", prompt, "--json"], {
+    const { stdout } = await execFileAsync("openclaw", ["agent", "--agent", "main", "--message", prompt, "--json"], {
       timeout: 30_000,
     });
-    // Parse JSON response — openclaw agent --json returns { message: "..." }
+    // Parse JSON response — openclaw agent --json returns { result: { payloads: [{ text: "..." }] } }
     try {
-      const parsed = JSON.parse(stdout.trim());
-      const msg = parsed.message ?? parsed.text ?? parsed.content ?? stdout.trim();
-      return typeof msg === "string" ? msg.trim() : null;
+      // Skip any non-JSON prefix lines (e.g. "Config warnings:...")
+      const jsonStart = stdout.indexOf("{");
+      const jsonStr = jsonStart >= 0 ? stdout.slice(jsonStart) : stdout;
+      const parsed = JSON.parse(jsonStr.trim());
+      const text = parsed?.result?.payloads?.[0]?.text
+        ?? parsed?.message
+        ?? parsed?.text
+        ?? null;
+      return typeof text === "string" ? text.trim().slice(0, 200) : null;
     } catch {
       // Fallback: treat raw stdout as the response
-      return stdout.trim().slice(0, 200) || null;
+      const clean = stdout.replace(/^Config warnings:.*\n?/gm, "").trim();
+      return clean.slice(0, 200) || null;
     }
   } catch (err: any) {
     console.warn(`[sentinel] LLM assessment failed: ${err?.message ?? err}`);
