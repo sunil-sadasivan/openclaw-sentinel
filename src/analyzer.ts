@@ -312,7 +312,7 @@ export function analyzeFileEvents(
 /**
  * Format a security event for human-readable alerting.
  */
-export function formatAlert(evt: SecurityEvent): string {
+export function formatAlert(evt: SecurityEvent, assessment?: string | null): string {
   const severityEmoji: Record<Severity, string> = {
     critical: "🚨",
     high: "🔴",
@@ -324,11 +324,17 @@ export function formatAlert(evt: SecurityEvent): string {
   const emoji = severityEmoji[evt.severity];
   const time = new Date(evt.timestamp).toLocaleTimeString();
 
-  return [
+  const lines = [
     `${emoji} **SENTINEL: ${evt.title}**`,
     `Severity: ${evt.severity.toUpperCase()} | ${evt.category}`,
     `Host: ${evt.hostname} | ${time}`,
     "",
     evt.description,
-  ].join("\n");
+  ];
+
+  if (assessment) {
+    lines.push("", `🦞 ${assessment}`);
+  }
+
+  return lines.join("\n");
 }

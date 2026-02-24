@@ -22,7 +22,7 @@ export interface SentinelConfig {
   trustedPaths?: string[];
   trustedCommandPatterns?: string[];
   watchPaths?: string[];
-  /** Use LLM to assess suspicious commands before alerting (requires openclaw CLI) */
+  /** Add a one-line LLM assessment to alerts before sending (requires openclaw CLI) */
   llmAlertAssessment?: boolean;
 }
 

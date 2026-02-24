@@ -119,41 +119,40 @@ async function checkDaemon(sentinelDir: string): Promise<boolean> {
 }
 
 /**
- * Use the LLM (via openclaw CLI) to assess whether a suspicious command
- * is likely benign (e.g., spawned by OpenClaw heartbeat/cron) or genuinely
- * suspicious. Returns true if the alert should be sent.
+ * Use the LLM (via openclaw CLI) to generate a one-line human-readable
+ * assessment of a security event. Returns the assessment string, or null
+ * on failure.
  */
-async function llmAssessAlert(evt: SecurityEvent): Promise<boolean> {
+async function llmAssessEvent(evt: SecurityEvent): Promise<string | null> {
   const details = typeof evt.details === "string" ? evt.details : JSON.stringify(evt.details);
-  const prompt = `You are a security analyst. A security monitoring tool flagged this command as suspicious:
+  const prompt = `You are a security-savvy AI agent named Claw monitoring your human's machine. A security event was detected:
 
 Title: ${evt.title}
+Severity: ${evt.severity}
+Category: ${evt.category}
 Description: ${evt.description}
 Details: ${details}
 
-Context: This machine runs OpenClaw (an AI assistant platform) which frequently executes commands via heartbeats, cron jobs, and agent tasks. These include:
-- Python one-liners for data processing (json, csv, yfinance, etc.)
-- curl/wget calls to APIs (Sentry, Mezmo, GitHub, etc.)
-- bq (BigQuery) queries
-- git operations
-- npm/node commands
+Context: This machine runs OpenClaw (an AI assistant platform) which frequently spawns commands via heartbeats, cron jobs, and agent tasks — python one-liners, curl/wget API calls, bq queries, git, npm/node, etc. The user is "sunil".
 
-Should this alert be sent to the user? Reply with ONLY "SEND" if it's genuinely suspicious, or "SKIP" if it's likely a benign OpenClaw-spawned command. No explanation needed.`;
+Reply with ONLY a single short sentence (under 30 words) giving your honest take on whether this is a real problem or likely benign. Be direct, opinionated, and useful — like a senior engineer glancing at an alert. No preamble.`;
 
   try {
     const { stdout } = await execFileAsync("openclaw", ["agent", "--message", prompt, "--json"], {
       timeout: 30_000,
     });
-    const response = stdout.trim().toUpperCase();
-    if (response.includes("SKIP")) {
-      console.log(`[sentinel] LLM assessed alert as benign, skipping: ${evt.title}`);
-      return false;
+    // Parse JSON response — openclaw agent --json returns { message: "..." }
+    try {
+      const parsed = JSON.parse(stdout.trim());
+      const msg = parsed.message ?? parsed.text ?? parsed.content ?? stdout.trim();
+      return typeof msg === "string" ? msg.trim() : null;
+    } catch {
+      // Fallback: treat raw stdout as the response
+      return stdout.trim().slice(0, 200) || null;
     }
-    return true;
   } catch (err: any) {
-    // If LLM assessment fails, err on the side of alerting
-    console.warn(`[sentinel] LLM assessment failed, sending alert anyway: ${err?.message ?? err}`);
-    return true;
+    console.warn(`[sentinel] LLM assessment failed: ${err?.message ?? err}`);
+    return null;
   }
 }
 
@@ -199,16 +198,13 @@ function handleResult(
       const suppressed = suppressionStore?.isSuppressed(evt);
       if (suppressed) {
         console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
-      } else if (config.llmAlertAssessment && evt.title === "Suspicious command detected") {
-        // Use LLM to assess whether this is a benign OpenClaw command
-        llmAssessAlert(evt).then((shouldSend) => {
-          if (shouldSend) {
-            sendAlert(formatAlert(evt)).catch((err) => {
-              console.error("[sentinel] alert failed:", err);
-            });
-          }
-        }).catch((err) => {
-          console.error("[sentinel] LLM assessment error, sending alert:", err);
+      } else if (config.llmAlertAssessment) {
+        // Get LLM assessment and include it in the alert
+        llmAssessEvent(evt).then((assessment) => {
+          sendAlert(formatAlert(evt, assessment)).catch((err) => {
+            console.error("[sentinel] alert failed:", err);
+          });
+        }).catch(() => {
           sendAlert(formatAlert(evt)).catch(() => {});
         });
       } else {
@@ -663,13 +659,11 @@ export default function sentinel(api: any): void {
             const suppressed = suppressionStore?.isSuppressed(evt);
             if (suppressed) {
               console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
-            } else if (pluginConfig.llmAlertAssessment && evt.title === "Suspicious command detected") {
-              llmAssessAlert(evt).then((shouldSend) => {
-                if (shouldSend) {
-                  sendAlert(formatAlert(evt)).catch((err) => {
-                    console.error("[sentinel] alert failed:", err);
-                  });
-                }
+            } else if (pluginConfig.llmAlertAssessment) {
+              llmAssessEvent(evt).then((assessment) => {
+                sendAlert(formatAlert(evt, assessment)).catch((err) => {
+                  console.error("[sentinel] alert failed:", err);
+                });
               }).catch(() => {
                 sendAlert(formatAlert(evt)).catch(() => {});
               });
