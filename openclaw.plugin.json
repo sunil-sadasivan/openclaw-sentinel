@@ -61,10 +61,19 @@
         "items": { "type": "string" },
         "description": "Process paths to trust (skip alerts for these)"
       },
+      "trustedCommandPatterns": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "Regex patterns for commands to skip (e.g. OpenClaw heartbeat scripts)"
+      },
       "watchPaths": {
         "type": "array",
         "items": { "type": "string" },
         "description": "File paths to monitor for integrity changes"
+      },
+      "llmAlertAssessment": {
+        "type": "boolean",
+        "description": "Use LLM to assess suspicious commands before alerting (reduces false positives from automation)"
       }
     }
   },

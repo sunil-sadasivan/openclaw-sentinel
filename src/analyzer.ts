@@ -83,11 +83,17 @@ export function analyzeProcessEvents(
       continue;
     }
 
-    // MEDIUM: Suspicious command patterns
+    // Skip commands matching trusted patterns (e.g. OpenClaw heartbeat scripts)
+    const trustedCmdPatterns = (config.trustedCommandPatterns ?? []).map(
+      (p) => new RegExp(p, "i"),
+    );
+    if (trustedCmdPatterns.some((p) => p.test(cmdline))) continue;
+
+    // Suspicious command patterns — only flag actually dangerous imports/tools
     const suspiciousPatterns = [
       /curl.*\|.*sh/i,
       /wget.*\|.*sh/i,
-      /python.*-c.*import/i,
+      /python.*-c.*import\s+(os|subprocess|socket|pty|shutil|ctypes)/i,
       /base64.*decode/i,
       /nc\s+-l/i,
       /ncat.*-l/i,
