@@ -207,14 +207,18 @@ function handleResult(
         console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
       } else if (config.llmAlertAssessment) {
         // Get LLM assessment and include it in the alert
+        console.log(`[sentinel] LLM assessment enabled, calling for: ${evt.title}`);
         llmAssessEvent(evt).then((assessment) => {
+          console.log(`[sentinel] LLM assessment result: ${assessment?.slice(0, 80) ?? "(null)"}`);
           sendAlert(formatAlert(evt, assessment)).catch((err) => {
             console.error("[sentinel] alert failed:", err);
           });
-        }).catch(() => {
+        }).catch((err) => {
+          console.warn(`[sentinel] LLM assessment promise rejected: ${err}`);
           sendAlert(formatAlert(evt)).catch(() => {});
         });
       } else {
+        console.log(`[sentinel] LLM assessment NOT enabled (llmAlertAssessment=${config.llmAlertAssessment})`);
         sendAlert(formatAlert(evt)).catch((err) => {
           console.error("[sentinel] alert failed:", err);
         });
@@ -242,7 +246,7 @@ export default function sentinel(api: any): void {
     fileConfig = raw?.plugins?.entries?.sentinel?.config ?? {};
   } catch { /* ignore */ }
   const pluginConfig: SentinelConfig = { ...fileConfig, ...apiConfig } as SentinelConfig;
-  console.log(`[sentinel] Config: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}`);
+  console.log(`[sentinel] Config v0.3.0: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}, llmAssess=${pluginConfig.llmAlertAssessment}, trustedPatterns=${(pluginConfig.trustedCommandPatterns ?? []).length}`);
   let watcher: ResultLogWatcher | null = null;
   let logStreamWatcher: LogStreamWatcher | null = null;
   const sentinelDir = pluginConfig.logPath ?? SENTINEL_DIR_DEFAULT;

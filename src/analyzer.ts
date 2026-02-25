@@ -103,13 +103,24 @@ export function analyzeProcessEvents(
     ];
 
     if (suspiciousPatterns.some((p) => p.test(cmdline))) {
+      // Detect likely OpenClaw-spawned commands: safe python one-liners,
+      // curl to known APIs, etc. run by the host user. Downgrade to low.
+      const safeAgentPatterns = [
+        /python.*-c.*import\s+(json|sys|csv|re|datetime|warnings|urllib|http|pathlib|hashlib|hmac|base64|time|math|collections|itertools|functools|textwrap|string|io|copy)/i,
+        /python.*-c.*from\s+(google|googleapiclient|oauth2client|service_account)/i,
+        /curl.*-[sS].*(-H\s+["']Authorization|api\.|sentry\.io|helpscout\.net|trusthub\.twilio|ngpvan\.com|github\.com|slack\.com)/i,
+        /bq\s+(query|ls|show|head|mk)/i,
+        /gh\s+(api|pr|issue|run)/i,
+      ];
+      const isLikelyAgent = safeAgentPatterns.some((p) => p.test(cmdline));
+
       events.push(
         event(
-          "high",
+          isLikelyAgent ? "low" : "high",
           "process",
           "Suspicious command detected",
           `Potentially malicious command: ${cmdline}\nProcess: ${path}\nUser: ${username}`,
-          { path, cmdline, uid, username },
+          { path, cmdline, uid, username, likelyAgent: isLikelyAgent },
         ),
       );
     }
