@@ -20,7 +20,10 @@ export interface SentinelConfig {
   enableNetworkMonitor?: boolean;
   trustedSigningIds?: string[];
   trustedPaths?: string[];
+  trustedCommandPatterns?: string[];
   watchPaths?: string[];
+  /** Add a one-line LLM assessment to alerts before sending (requires openclaw CLI) */
+  llmAlertAssessment?: boolean;
 }
 
 export const DEFAULT_CONFIG: Required<

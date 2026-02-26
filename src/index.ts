@@ -119,6 +119,51 @@ async function checkDaemon(sentinelDir: string): Promise<boolean> {
 }
 
 /**
+ * Use the LLM (via openclaw CLI) to generate a one-line human-readable
+ * assessment of a security event. Returns the assessment string, or null
+ * on failure.
+ */
+async function llmAssessEvent(evt: SecurityEvent): Promise<string | null> {
+  const details = typeof evt.details === "string" ? evt.details : JSON.stringify(evt.details);
+  const prompt = `You are a security-savvy AI agent named Claw monitoring your human's machine. A security event was detected:
+
+Title: ${evt.title}
+Severity: ${evt.severity}
+Category: ${evt.category}
+Description: ${evt.description}
+Details: ${details}
+
+Context: This machine runs OpenClaw (an AI assistant platform) which frequently spawns commands via heartbeats, cron jobs, and agent tasks — python one-liners, curl/wget API calls, bq queries, git, npm/node, etc. The user is "sunil".
+
+Reply with ONLY a single short sentence (under 30 words) giving your honest take on whether this is a real problem or likely benign. Be direct, opinionated, and useful — like a senior engineer glancing at an alert. No preamble.`;
+
+  try {
+    const { stdout } = await execFileAsync("openclaw", ["agent", "--agent", "main", "--message", prompt, "--json"], {
+      timeout: 30_000,
+    });
+    // Parse JSON response — openclaw agent --json returns { result: { payloads: [{ text: "..." }] } }
+    try {
+      // Skip any non-JSON prefix lines (e.g. "Config warnings:...")
+      const jsonStart = stdout.indexOf("{");
+      const jsonStr = jsonStart >= 0 ? stdout.slice(jsonStart) : stdout;
+      const parsed = JSON.parse(jsonStr.trim());
+      const text = parsed?.result?.payloads?.[0]?.text
+        ?? parsed?.message
+        ?? parsed?.text
+        ?? null;
+      return typeof text === "string" ? text.trim().slice(0, 200) : null;
+    } catch {
+      // Fallback: treat raw stdout as the response
+      const clean = stdout.replace(/^Config warnings:.*\n?/gm, "").trim();
+      return clean.slice(0, 200) || null;
+    }
+  } catch (err: any) {
+    console.warn(`[sentinel] LLM assessment failed: ${err?.message ?? err}`);
+    return null;
+  }
+}
+
+/**
  * Handle an osquery result batch — route to appropriate analyzer.
  */
 function handleResult(
@@ -160,7 +205,20 @@ function handleResult(
       const suppressed = suppressionStore?.isSuppressed(evt);
       if (suppressed) {
         console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
+      } else if (config.llmAlertAssessment) {
+        // Get LLM assessment and include it in the alert
+        console.log(`[sentinel] LLM assessment enabled, calling for: ${evt.title}`);
+        llmAssessEvent(evt).then((assessment) => {
+          console.log(`[sentinel] LLM assessment result: ${assessment?.slice(0, 80) ?? "(null)"}`);
+          sendAlert(formatAlert(evt, assessment)).catch((err) => {
+            console.error("[sentinel] alert failed:", err);
+          });
+        }).catch((err) => {
+          console.warn(`[sentinel] LLM assessment promise rejected: ${err}`);
+          sendAlert(formatAlert(evt)).catch(() => {});
+        });
       } else {
+        console.log(`[sentinel] LLM assessment NOT enabled (llmAlertAssessment=${config.llmAlertAssessment})`);
         sendAlert(formatAlert(evt)).catch((err) => {
           console.error("[sentinel] alert failed:", err);
         });
@@ -188,7 +246,7 @@ export default function sentinel(api: any): void {
     fileConfig = raw?.plugins?.entries?.sentinel?.config ?? {};
   } catch { /* ignore */ }
   const pluginConfig: SentinelConfig = { ...fileConfig, ...apiConfig } as SentinelConfig;
-  console.log(`[sentinel] Config: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}`);
+  console.log(`[sentinel] Config v0.3.0: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}, llmAssess=${pluginConfig.llmAlertAssessment}, trustedPatterns=${(pluginConfig.trustedCommandPatterns ?? []).length}`);
   let watcher: ResultLogWatcher | null = null;
   let logStreamWatcher: LogStreamWatcher | null = null;
   const sentinelDir = pluginConfig.logPath ?? SENTINEL_DIR_DEFAULT;
@@ -612,6 +670,14 @@ export default function sentinel(api: any): void {
             const suppressed = suppressionStore?.isSuppressed(evt);
             if (suppressed) {
               console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
+            } else if (pluginConfig.llmAlertAssessment) {
+              llmAssessEvent(evt).then((assessment) => {
+                sendAlert(formatAlert(evt, assessment)).catch((err) => {
+                  console.error("[sentinel] alert failed:", err);
+                });
+              }).catch(() => {
+                sendAlert(formatAlert(evt)).catch(() => {});
+              });
             } else {
               sendAlert(formatAlert(evt)).catch((err) => {
                 console.error("[sentinel] alert failed:", err);

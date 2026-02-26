@@ -83,11 +83,17 @@ export function analyzeProcessEvents(
       continue;
     }
 
-    // MEDIUM: Suspicious command patterns
+    // Skip commands matching trusted patterns (e.g. OpenClaw heartbeat scripts)
+    const trustedCmdPatterns = (config.trustedCommandPatterns ?? []).map(
+      (p) => new RegExp(p, "i"),
+    );
+    if (trustedCmdPatterns.some((p) => p.test(cmdline))) continue;
+
+    // Suspicious command patterns — only flag actually dangerous imports/tools
     const suspiciousPatterns = [
       /curl.*\|.*sh/i,
       /wget.*\|.*sh/i,
-      /python.*-c.*import/i,
+      /python.*-c.*import\s+(os|subprocess|socket|pty|shutil|ctypes)/i,
       /base64.*decode/i,
       /nc\s+-l/i,
       /ncat.*-l/i,
@@ -97,13 +103,24 @@ export function analyzeProcessEvents(
     ];
 
     if (suspiciousPatterns.some((p) => p.test(cmdline))) {
+      // Detect likely OpenClaw-spawned commands: safe python one-liners,
+      // curl to known APIs, etc. run by the host user. Downgrade to low.
+      const safeAgentPatterns = [
+        /python.*-c.*import\s+(json|sys|csv|re|datetime|warnings|urllib|http|pathlib|hashlib|hmac|base64|time|math|collections|itertools|functools|textwrap|string|io|copy)/i,
+        /python.*-c.*from\s+(google|googleapiclient|oauth2client|service_account)/i,
+        /curl.*-[sS].*(-H\s+["']Authorization|api\.|sentry\.io|helpscout\.net|trusthub\.twilio|ngpvan\.com|github\.com|slack\.com)/i,
+        /bq\s+(query|ls|show|head|mk)/i,
+        /gh\s+(api|pr|issue|run)/i,
+      ];
+      const isLikelyAgent = safeAgentPatterns.some((p) => p.test(cmdline));
+
       events.push(
         event(
-          "high",
+          isLikelyAgent ? "low" : "high",
           "process",
           "Suspicious command detected",
           `Potentially malicious command: ${cmdline}\nProcess: ${path}\nUser: ${username}`,
-          { path, cmdline, uid, username },
+          { path, cmdline, uid, username, likelyAgent: isLikelyAgent },
         ),
       );
     }
@@ -306,7 +323,7 @@ export function analyzeFileEvents(
 /**
  * Format a security event for human-readable alerting.
  */
-export function formatAlert(evt: SecurityEvent): string {
+export function formatAlert(evt: SecurityEvent, assessment?: string | null): string {
   const severityEmoji: Record<Severity, string> = {
     critical: "🚨",
     high: "🔴",
@@ -318,11 +335,17 @@ export function formatAlert(evt: SecurityEvent): string {
   const emoji = severityEmoji[evt.severity];
   const time = new Date(evt.timestamp).toLocaleTimeString();
 
-  return [
+  const lines = [
     `${emoji} **SENTINEL: ${evt.title}**`,
     `Severity: ${evt.severity.toUpperCase()} | ${evt.category}`,
     `Host: ${evt.hostname} | ${time}`,
     "",
     evt.description,
-  ].join("\n");
+  ];
+
+  if (assessment) {
+    lines.push("", `🦞 ${assessment}`);
+  }
+
+  return lines.join("\n");
 }
