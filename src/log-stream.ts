@@ -33,8 +33,8 @@ function event(
 /**
  * Parse a macOS `log stream` line for SSH events.
  * Lines look like:
- *   2026-02-22 16:30:00.123456-0500  0x1234  Default  0x0  0  sshd: Accepted publickey for sunil from 100.79.207.74 port 52341 ssh2
- *   2026-02-22 16:30:00.123456-0500  0x1234  Default  0x0  0  sshd: Failed password for sunil from 203.0.113.42 port 22 ssh2
+ *   2026-02-22 16:30:00.123456-0500  0x1234  Default  0x0  0  sshd: Accepted publickey for alice from 100.79.207.74 port 52341 ssh2
+ *   2026-02-22 16:30:00.123456-0500  0x1234  Default  0x0  0  sshd: Failed password for alice from 203.0.113.42 port 22 ssh2
  *   2026-02-22 16:30:00.123456-0500  0x1234  Default  0x0  0  sshd: Invalid user admin from 203.0.113.42 port 22
  */
 function parseMacOSLogLine(
@@ -95,7 +95,7 @@ function parseMacOSLogLine(
 /**
  * Parse a Linux journalctl line for SSH events.
  * Lines look like:
- *   Feb 22 16:30:00 hostname sshd[1234]: Accepted publickey for sunil from 100.79.207.74 port 52341 ssh2
+ *   Feb 22 16:30:00 hostname sshd[1234]: Accepted publickey for alice from 100.79.207.74 port 52341 ssh2
  */
 function parseLinuxLogLine(
   line: string,
@@ -108,9 +108,9 @@ function parseLinuxLogLine(
 /**
  * Parse Linux sudo events from journalctl / auth.log.
  * Lines look like:
- *   Feb 22 16:30:00 hostname sudo[1234]:   sunil : TTY=pts/0 ; PWD=/home/sunil ; USER=root ; COMMAND=/usr/bin/apt update
- *   Feb 22 16:30:00 hostname sudo[1234]: pam_unix(sudo:session): session opened for user root(uid=0) by sunil(uid=1000)
- *   Feb 22 16:30:00 hostname sudo[1234]:   sunil : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/home/sunil ; USER=root ; COMMAND=/usr/bin/rm -rf /
+ *   Feb 22 16:30:00 hostname sudo[1234]:   alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt update
+ *   Feb 22 16:30:00 hostname sudo[1234]: pam_unix(sudo:session): session opened for user root(uid=0) by alice(uid=1000)
+ *   Feb 22 16:30:00 hostname sudo[1234]:   alice : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/rm -rf /
  */
 function parseLinuxSudo(line: string): SecurityEvent | null {
   // Standard sudo command log
@@ -152,8 +152,8 @@ function parseLinuxSudo(line: string): SecurityEvent | null {
  * Lines from useradd/userdel/usermod/passwd via journalctl or auth.log:
  *   Feb 22 16:30:00 hostname useradd[1234]: new user: name=backdoor, UID=1001, GID=1001, home=/home/backdoor, shell=/bin/bash
  *   Feb 22 16:30:00 hostname userdel[1234]: delete user 'olduser'
- *   Feb 22 16:30:00 hostname usermod[1234]: change user 'sunil' password
- *   Feb 22 16:30:00 hostname passwd[1234]: pam_unix(passwd:chauthtok): password changed for sunil
+ *   Feb 22 16:30:00 hostname usermod[1234]: change user 'alice' password
+ *   Feb 22 16:30:00 hostname passwd[1234]: pam_unix(passwd:chauthtok): password changed for alice
  *   Feb 22 16:30:00 hostname groupadd[1234]: new group: name=newgroup, GID=1002
  */
 function parseLinuxUserAccount(line: string): SecurityEvent | null {
@@ -234,7 +234,7 @@ function parseLinuxUserAccount(line: string): SecurityEvent | null {
  * Parse Linux remote desktop / VNC events.
  * Lines from xrdp, vncserver, x11vnc:
  *   Feb 22 16:30:00 hostname xrdp[1234]: connected client: 203.0.113.42
- *   Feb 22 16:30:00 hostname xrdp-sesman[1234]: session started for user sunil
+ *   Feb 22 16:30:00 hostname xrdp-sesman[1234]: session started for user alice
  *   Feb 22 16:30:00 hostname x11vnc[1234]: Got connection from client 203.0.113.42
  */
 function parseLinuxRemoteDesktop(line: string): SecurityEvent | null {
@@ -286,10 +286,10 @@ function parseLinuxRemoteDesktop(line: string): SecurityEvent | null {
 /**
  * Parse macOS /var/log/system.log lines for SSH events.
  * Lines look like:
- *   Feb 22 16:39:32 sunils-mac-mini sshd-session: sunil [priv][58912]: USER_PROCESS: 58916 ttys001
- *   Feb 22 16:38:12 sunils-mac-mini sshd-session: sunil [priv][53930]: DEAD_PROCESS: 53934 ttys012
- *   Feb 22 16:51:16 sunils-mac-mini sshd[60738]: Failed password for sunil from 100.79.207.74 port 52341 ssh2
- *   Feb 22 16:51:16 sunils-mac-mini sshd[60738]: Invalid user admin from 100.79.207.74 port 52341
+ *   Feb 22 16:39:32 my-hostname sshd-session: alice [priv][58912]: USER_PROCESS: 58916 ttys001
+ *   Feb 22 16:38:12 my-hostname sshd-session: alice [priv][53930]: DEAD_PROCESS: 53934 ttys012
+ *   Feb 22 16:51:16 my-hostname sshd[60738]: Failed password for alice from 100.79.207.74 port 52341 ssh2
+ *   Feb 22 16:51:16 my-hostname sshd[60738]: Invalid user admin from 100.79.207.74 port 52341
  */
 function parseMacOSSyslog(
   line: string,
@@ -376,7 +376,7 @@ function parseMacOSSyslog(
 /**
  * Parse macOS unified log lines for PAM authentication errors.
  * Line format:
- *   2026-02-22 16:56:51.705020-0500  0x14e5ecb  Default  0x0  62761  0  sshd-session: error: PAM: authentication error for sunil from 100.79.207.74
+ *   2026-02-22 16:56:51.705020-0500  0x14e5ecb  Default  0x0  62761  0  sshd-session: error: PAM: authentication error for alice from 100.79.207.74
  */
 function parseMacOSAuthError(
   line: string,

@@ -150,7 +150,7 @@ describe("analyzeLoginEvents", () => {
 
   it("emits info event for known hosts", () => {
     const rows = [
-      { user: "sunil", host: "192.168.1.100", type: "user" },
+      { user: "alice", host: "192.168.1.100", type: "user" },
     ];
     const events = analyzeLoginEvents(rows, knownHosts);
     assert.equal(events.length, 1);
@@ -160,9 +160,9 @@ describe("analyzeLoginEvents", () => {
 
   it("emits info event for Tailscale CGNAT range (100.64-127.x.x)", () => {
     const rows = [
-      { user: "sunil", host: "100.79.207.74", type: "user" },
-      { user: "sunil", host: "100.94.48.17", type: "user" },
-      { user: "sunil", host: "100.127.255.255", type: "user" },
+      { user: "alice", host: "100.79.207.74", type: "user" },
+      { user: "alice", host: "100.94.48.17", type: "user" },
+      { user: "alice", host: "100.127.255.255", type: "user" },
     ];
     const events = analyzeLoginEvents(rows, new Set());
     assert.equal(events.length, 3);
@@ -181,10 +181,10 @@ describe("analyzeLoginEvents", () => {
 
   it("skips localhost and empty hosts", () => {
     const rows = [
-      { user: "sunil", host: "", type: "user" },
-      { user: "sunil", host: "localhost", type: "user" },
-      { user: "sunil", host: "127.0.0.1", type: "user" },
-      { user: "sunil", host: "::1", type: "user" },
+      { user: "alice", host: "", type: "user" },
+      { user: "alice", host: "localhost", type: "user" },
+      { user: "alice", host: "127.0.0.1", type: "user" },
+      { user: "alice", host: "::1", type: "user" },
     ];
     const events = analyzeLoginEvents(rows, new Set());
     assert.equal(events.length, 0);

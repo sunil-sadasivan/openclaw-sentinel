@@ -5,7 +5,7 @@
  * - "exact": matches title + description exactly
  * - "title": matches events with the same title
  * - "category": matches all events in a category (e.g., all ssh_login)
- * - "field": matches a specific field value (e.g., details.user === "sunil")
+ * - "field": matches a specific field value (e.g., details.user === "alice")
  */
 
 import { readFile, writeFile, mkdir } from "node:fs/promises";

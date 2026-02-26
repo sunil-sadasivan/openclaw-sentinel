@@ -98,7 +98,7 @@ describe("SuppressionStore", () => {
     await store.add({
       scope: "field",
       field: "user",
-      fieldValue: "sunil",
+      fieldValue: "alice",
       reason: "Sunil's own sudo",
       expiresAt: null,
     });
@@ -106,7 +106,7 @@ describe("SuppressionStore", () => {
     const evt = makeEvent({
       title: "sudo command executed",
       category: "privilege",
-      details: { user: "sunil", command: "/usr/bin/ls" },
+      details: { user: "alice", command: "/usr/bin/ls" },
     });
     assert.ok(store.isSuppressed(evt));
 
@@ -213,8 +213,8 @@ describe("SuppressionStore", () => {
       'All alerts in category "ssh_login"',
     );
     assert.equal(
-      SuppressionStore.describe({ scope: "field", field: "user", fieldValue: "sunil" } as any),
-      'Alerts where user = "sunil"',
+      SuppressionStore.describe({ scope: "field", field: "user", fieldValue: "alice" } as any),
+      'Alerts where user = "alice"',
     );
     assert.equal(
       SuppressionStore.describe({ scope: "exact", title: "test" } as any),

@@ -143,7 +143,7 @@ Category: ${evt.category}
 Description: ${evt.description}
 Details: ${details}
 
-Context: This machine runs OpenClaw (an AI assistant platform) which frequently spawns commands via heartbeats, cron jobs, and agent tasks — python one-liners, curl/wget API calls, bq queries, git, npm/node, etc. The user is "sunil".
+Context: This machine runs OpenClaw (an AI assistant platform) which frequently spawns commands via heartbeats, cron jobs, and agent tasks — python one-liners, curl/wget API calls, bq queries, git, npm/node, etc. The user is the machine owner.
 
 Reply with ONLY a single short sentence (under 30 words) giving your honest take on whether this is a real problem or likely benign. Be direct, opinionated, and useful — like a senior engineer glancing at an alert. No preamble.`;
 
@@ -421,7 +421,7 @@ export default function sentinel(api: any): void {
     description:
       "Manage alert suppression rules. Actions: 'add' (create a suppression), 'list' (show all), 'remove' (delete by id), 'cleanup' (remove expired). " +
       "Scopes: 'title' (suppress all alerts with this title), 'category' (suppress entire category like ssh_login/privilege/auth), " +
-      "'field' (suppress when a specific detail field matches, e.g. field=user fieldValue=sunil), 'exact' (suppress only this exact title+description). " +
+      "'field' (suppress when a specific detail field matches, e.g. field=user fieldValue=alice), 'exact' (suppress only this exact title+description). " +
       "Always explain to the user what will be suppressed before adding a rule.",
     parameters: Type.Object({
       action: Type.Union([

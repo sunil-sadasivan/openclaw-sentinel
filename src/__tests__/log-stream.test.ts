@@ -11,13 +11,13 @@ describe("SSH log line patterns", () => {
 
   it("matches 'Accepted publickey' pattern", () => {
     const line =
-      '2026-02-22 16:30:00.123456-0500  0x1234  Default  0x0  0  sshd: Accepted publickey for sunil from 100.79.207.74 port 52341 ssh2';
+      '2026-02-22 16:30:00.123456-0500  0x1234  Default  0x0  0  sshd: Accepted publickey for alice from 100.79.207.74 port 52341 ssh2';
     const match = line.match(
       /sshd.*?:\s+Accepted\s+(\S+)\s+for\s+(\S+)\s+from\s+(\S+)\s+port\s+(\d+)/,
     );
     assert.ok(match);
     assert.equal(match[1], "publickey");
-    assert.equal(match[2], "sunil");
+    assert.equal(match[2], "alice");
     assert.equal(match[3], "100.79.207.74");
     assert.equal(match[4], "52341");
   });
@@ -36,12 +36,12 @@ describe("SSH log line patterns", () => {
 
   it("matches 'Failed password' pattern", () => {
     const line =
-      '2026-02-22 16:30:00.123456-0500  0x1234  Default  0x0  0  sshd: Failed password for sunil from 203.0.113.42 port 22 ssh2';
+      '2026-02-22 16:30:00.123456-0500  0x1234  Default  0x0  0  sshd: Failed password for alice from 203.0.113.42 port 22 ssh2';
     const match = line.match(
       /sshd.*?:\s+Failed\s+password\s+for\s+(?:invalid\s+user\s+)?(\S+)\s+from\s+(\S+)\s+port\s+(\d+)/,
     );
     assert.ok(match);
-    assert.equal(match[1], "sunil");
+    assert.equal(match[1], "alice");
     assert.equal(match[2], "203.0.113.42");
   });
 
@@ -69,12 +69,12 @@ describe("SSH log line patterns", () => {
 
   it("matches macOS sshd-session USER_PROCESS pattern", () => {
     const line =
-      "Feb 22 16:39:32 sunils-mac-mini sshd-session: sunil [priv][58912]: USER_PROCESS: 58916 ttys001";
+      "Feb 22 16:39:32 my-hostname sshd-session: alice [priv][58912]: USER_PROCESS: 58916 ttys001";
     const match = line.match(
       /sshd-session:\s+(\S+)\s+\[priv\]\[(\d+)\]:\s+USER_PROCESS:\s+(\d+)\s+(\S+)/,
     );
     assert.ok(match);
-    assert.equal(match[1], "sunil");
+    assert.equal(match[1], "alice");
     assert.equal(match[2], "58912");
     assert.equal(match[3], "58916");
     assert.equal(match[4], "ttys001");
@@ -82,7 +82,7 @@ describe("SSH log line patterns", () => {
 
   it("does not match sshd-session DEAD_PROCESS", () => {
     const line =
-      "Feb 22 16:38:12 sunils-mac-mini sshd-session: sunil [priv][53930]: DEAD_PROCESS: 53934 ttys012";
+      "Feb 22 16:38:12 my-hostname sshd-session: alice [priv][53930]: DEAD_PROCESS: 53934 ttys012";
     const match = line.match(
       /sshd-session:\s+(\S+)\s+\[priv\]\[(\d+)\]:\s+USER_PROCESS:\s+(\d+)\s+(\S+)/,
     );
@@ -125,12 +125,12 @@ describe("Tailscale IP detection", () => {
 describe("Linux sudo log patterns", () => {
   it("matches sudo command execution", () => {
     const line =
-      "Feb 22 16:30:00 myhost sudo[1234]:   sunil : TTY=pts/0 ; PWD=/home/sunil ; USER=root ; COMMAND=/usr/bin/apt update";
+      "Feb 22 16:30:00 myhost sudo[1234]:   alice : TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/apt update";
     const match = line.match(
       /sudo\[\d+\]:\s+(\S+)\s*:\s*(?:.*?;\s*)?TTY=(\S+)\s*;\s*PWD=(\S+)\s*;\s*USER=(\S+)\s*;\s*COMMAND=(.*)/,
     );
     assert.ok(match);
-    assert.equal(match[1], "sunil");
+    assert.equal(match[1], "alice");
     assert.equal(match[2], "pts/0");
     assert.equal(match[4], "root");
     assert.equal(match[5].trim(), "/usr/bin/apt update");
@@ -138,24 +138,24 @@ describe("Linux sudo log patterns", () => {
 
   it("matches sudo with incorrect password attempts", () => {
     const line =
-      "Feb 22 16:30:00 myhost sudo[1234]:   sunil : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/home/sunil ; USER=root ; COMMAND=/usr/bin/rm -rf /";
+      "Feb 22 16:30:00 myhost sudo[1234]:   alice : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/home/alice ; USER=root ; COMMAND=/usr/bin/rm -rf /";
     const match = line.match(
       /sudo\[\d+\]:\s+(\S+)\s*:\s*(?:.*?;\s*)?TTY=(\S+)\s*;\s*PWD=(\S+)\s*;\s*USER=(\S+)\s*;\s*COMMAND=(.*)/,
     );
     assert.ok(match);
-    assert.equal(match[1], "sunil");
+    assert.equal(match[1], "alice");
     assert.ok(line.includes("incorrect password"));
   });
 
   it("matches sudo PAM session opened", () => {
     const line =
-      "Feb 22 16:30:00 myhost sudo[1234]: pam_unix(sudo:session): session opened for user root(uid=0) by sunil(uid=1000)";
+      "Feb 22 16:30:00 myhost sudo[1234]: pam_unix(sudo:session): session opened for user root(uid=0) by alice(uid=1000)";
     const match = line.match(
       /sudo\[\d+\]:\s+pam_unix\(sudo:session\):\s+session\s+opened\s+for\s+user\s+(\S+).*?by\s+(\S+)/,
     );
     assert.ok(match);
     assert.equal(match[1], "root(uid=0)");
-    assert.equal(match[2], "sunil(uid=1000)");
+    assert.equal(match[2], "alice(uid=1000)");
   });
 });
 
@@ -177,19 +177,19 @@ describe("Linux user account log patterns", () => {
 
   it("matches passwd password changed", () => {
     const line =
-      "Feb 22 16:30:00 myhost passwd[1234]: pam_unix(passwd:chauthtok): password changed for sunil";
+      "Feb 22 16:30:00 myhost passwd[1234]: pam_unix(passwd:chauthtok): password changed for alice";
     const match = line.match(
       /passwd\[\d+\]:\s+pam_unix\(passwd:chauthtok\):\s+password\s+changed\s+for\s+(\S+)/,
     );
     assert.ok(match);
-    assert.equal(match[1], "sunil");
+    assert.equal(match[1], "alice");
   });
 
   it("matches usermod change user", () => {
-    const line = "Feb 22 16:30:00 myhost usermod[1234]: change user 'sunil' shell";
+    const line = "Feb 22 16:30:00 myhost usermod[1234]: change user 'alice' shell";
     const match = line.match(/usermod\[\d+\]:\s+change\s+user\s+'(\S+)'/);
     assert.ok(match);
-    assert.equal(match[1], "sunil");
+    assert.equal(match[1], "alice");
   });
 
   it("matches groupadd new group (strips trailing comma)", () => {
@@ -214,12 +214,12 @@ describe("Linux remote desktop log patterns", () => {
 
   it("matches xrdp session started", () => {
     const line =
-      "Feb 22 16:30:00 myhost xrdp-sesman[1234]: session started for user sunil";
+      "Feb 22 16:30:00 myhost xrdp-sesman[1234]: session started for user alice";
     const match = line.match(
       /xrdp-sesman\[\d+\]:\s+.*?session\s+started.*?user\s+(\S+)/i,
     );
     assert.ok(match);
-    assert.equal(match[1], "sunil");
+    assert.equal(match[1], "alice");
   });
 
   it("matches VNC connection", () => {
