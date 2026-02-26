@@ -5,10 +5,11 @@
  * Uses event-driven log tailing for sub-second alerting.
  *
  * Architecture:
- *   osqueryd (daemon, managed externally via launchd) → writes results to JSON log
- *   Sentinel watcher  → tails log file via fs.watch + poll fallback
- *   Analyzer          → evaluates results against detection rules
- *   OpenClaw messaging → alerts on configured channel
+ *   Watchers (log stream + osquery) → events.jsonl → AlertTailer → assess → deliver
+ *
+ *   Detection is decoupled from alerting — watchers only parse and persist,
+ *   while AlertTailer handles rate limiting, dedup, suppression, Claw assessment,
+ *   and delivery by tailing events.jsonl.
  *
  * Note: osqueryd requires root/sudo — it must be started separately
  * (e.g., via launchd). This plugin only watches the result logs.
@@ -22,6 +23,7 @@ import { Type } from "@sinclair/typebox";
 import type { SentinelConfig, SecurityEvent } from "./config.js";
 import { findOsquery, query } from "./osquery.js";
 import { shouldAlert, meetsThreshold, createAlertState } from "./alerts.js";
+import { AlertTailer } from "./alert-tailer.js";
 import { EventStore } from "./persistence.js";
 import { ResultLogWatcher } from "./watcher.js";
 import type { OsqueryResultBatch } from "./watcher.js";
@@ -31,6 +33,14 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+
+// Use globalThis so state survives module re-evaluation on SIGUSR1 restarts.
+const G = globalThis as any;
+const SENTINEL_NS = "__sentinel__";
+if (!G[SENTINEL_NS]) G[SENTINEL_NS] = { cleanup: null, initialized: false };
+const _g = G[SENTINEL_NS] as { cleanup: (() => void) | null; initialized: boolean };
+
+
 import {
   analyzeProcessEvents,
   analyzeLoginEvents,
@@ -123,7 +133,7 @@ async function checkDaemon(sentinelDir: string): Promise<boolean> {
  * assessment of a security event. Returns the assessment string, or null
  * on failure.
  */
-async function llmAssessEvent(evt: SecurityEvent): Promise<string | null> {
+async function clawAssessEvent(evt: SecurityEvent): Promise<string | null> {
   const details = typeof evt.details === "string" ? evt.details : JSON.stringify(evt.details);
   const prompt = `You are a security-savvy AI agent named Claw monitoring your human's machine. A security event was detected:
 
@@ -158,7 +168,7 @@ Reply with ONLY a single short sentence (under 30 words) giving your honest take
       return clean.slice(0, 200) || null;
     }
   } catch (err: any) {
-    console.warn(`[sentinel] LLM assessment failed: ${err?.message ?? err}`);
+    console.warn(`[sentinel] Claw assessment failed: ${err?.message ?? err}`);
     return null;
   }
 }
@@ -200,30 +210,7 @@ function handleResult(
 
   for (const evt of events) {
     logEvent(evt);
-
-    if (meetsThreshold(evt.severity, config.alertSeverity) && shouldAlert(evt, alertRateState)) {
-      const suppressed = suppressionStore?.isSuppressed(evt);
-      if (suppressed) {
-        console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
-      } else if (config.llmAlertAssessment) {
-        // Get LLM assessment and include it in the alert
-        console.log(`[sentinel] LLM assessment enabled, calling for: ${evt.title}`);
-        llmAssessEvent(evt).then((assessment) => {
-          console.log(`[sentinel] LLM assessment result: ${assessment?.slice(0, 80) ?? "(null)"}`);
-          sendAlert(formatAlert(evt, assessment)).catch((err) => {
-            console.error("[sentinel] alert failed:", err);
-          });
-        }).catch((err) => {
-          console.warn(`[sentinel] LLM assessment promise rejected: ${err}`);
-          sendAlert(formatAlert(evt)).catch(() => {});
-        });
-      } else {
-        console.log(`[sentinel] LLM assessment NOT enabled (llmAlertAssessment=${config.llmAlertAssessment})`);
-        sendAlert(formatAlert(evt)).catch((err) => {
-          console.error("[sentinel] alert failed:", err);
-        });
-      }
-    }
+    // AlertTailer handles alerting by tailing events.jsonl
   }
 
   if (events.length > 0) {
@@ -246,9 +233,10 @@ export default function sentinel(api: any): void {
     fileConfig = raw?.plugins?.entries?.sentinel?.config ?? {};
   } catch { /* ignore */ }
   const pluginConfig: SentinelConfig = { ...fileConfig, ...apiConfig } as SentinelConfig;
-  console.log(`[sentinel] Config v0.3.2: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}, llmAssess=${pluginConfig.llmAlertAssessment}, trustedPatterns=${(pluginConfig.trustedCommandPatterns ?? []).length}`);
+  console.log(`[sentinel] Config v2026.2.26-1: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}, clawAssess=${pluginConfig.clawAssess}, trustedPatterns=${(pluginConfig.trustedCommandPatterns ?? []).length}`);
   let watcher: ResultLogWatcher | null = null;
   let logStreamWatcher: LogStreamWatcher | null = null;
+  let alertTailer: AlertTailer | null = null;
   const sentinelDir = pluginConfig.logPath ?? SENTINEL_DIR_DEFAULT;
 
   const sendAlert = async (text: string): Promise<void> => {
@@ -567,8 +555,20 @@ export default function sentinel(api: any): void {
     },
   });
 
+  // ── Clean up previous instance if re-initializing (SIGUSR1 restart) ──
+  if (typeof _g.cleanup === "function") {
+    console.log("[sentinel] Cleaning up previous instance before re-init");
+    _g.cleanup();
+    _g.cleanup = null;
+    _g.initialized = false;
+  }
+
   // ── Cleanup on process exit ──
   const cleanup = () => {
+    if (alertTailer) {
+      alertTailer.stop();
+      alertTailer = null;
+    }
     if (watcher) {
       watcher.stop();
       watcher = null;
@@ -579,15 +579,17 @@ export default function sentinel(api: any): void {
       logStreamWatcher = null;
     }
   };
+  _g.cleanup = cleanup;
   process.on("exit", cleanup);
   process.on("SIGTERM", cleanup);
   process.on("SIGINT", cleanup);
 
   // ── Start monitoring immediately (fire-and-forget) ──
-  if (state.watching) {
+  if (_g.initialized) {
     console.log("[sentinel] Already initialized, skipping double-init");
     return;
   }
+  _g.initialized = true;
 
   (async () => {
     try {
@@ -663,27 +665,7 @@ export default function sentinel(api: any): void {
       logStreamWatcher = new LogStreamWatcher(
         (evt) => {
           logEvent(evt);
-          if (
-            meetsThreshold(evt.severity, pluginConfig.alertSeverity) &&
-            shouldAlert(evt, alertRateState)
-          ) {
-            const suppressed = suppressionStore?.isSuppressed(evt);
-            if (suppressed) {
-              console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
-            } else if (pluginConfig.llmAlertAssessment) {
-              llmAssessEvent(evt).then((assessment) => {
-                sendAlert(formatAlert(evt, assessment)).catch((err) => {
-                  console.error("[sentinel] alert failed:", err);
-                });
-              }).catch(() => {
-                sendAlert(formatAlert(evt)).catch(() => {});
-              });
-            } else {
-              sendAlert(formatAlert(evt)).catch((err) => {
-                console.error("[sentinel] alert failed:", err);
-              });
-            }
-          }
+          // AlertTailer handles alerting by tailing events.jsonl
           console.log(
             `[sentinel] [real-time] ${evt.severity}/${evt.category}: ${evt.title}`,
           );
@@ -691,6 +673,17 @@ export default function sentinel(api: any): void {
         state.knownHosts,
       );
       logStreamWatcher.start();
+
+      // Start AlertTailer — single pipeline for all alerting
+      const eventsPath = join(sentinelDir, "events.jsonl");
+      alertTailer = new AlertTailer({
+        eventsPath,
+        config: pluginConfig,
+        suppressionStore,
+        sendAlert,
+        clawAssessEvent,
+      });
+      await alertTailer.start();
     } catch (err) {
       console.error("[sentinel] Failed to start:", err);
     }

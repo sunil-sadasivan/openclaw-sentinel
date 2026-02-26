@@ -2,7 +2,7 @@
   "id": "sentinel",
   "name": "Sentinel",
   "description": "Real-time endpoint security monitoring for macOS and Linux — process execution, SSH connections, privilege escalation, and file integrity alerts via OpenClaw.",
-  "version": "0.3.2",
+  "version": "2026.2.26-1",
   "skills": ["skills/sentinel"],
   "configSchema": {
     "type": "object",
@@ -71,9 +71,9 @@
         "items": { "type": "string" },
         "description": "File paths to monitor for integrity changes"
       },
-      "llmAlertAssessment": {
+      "clawAssess": {
         "type": "boolean",
-        "description": "Use LLM to assess suspicious commands before alerting (reduces false positives from automation)"
+        "description": "Use Claw to assess suspicious commands before alerting (reduces false positives from automation)"
       }
     }
   },
