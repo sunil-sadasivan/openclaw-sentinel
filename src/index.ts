@@ -31,6 +31,14 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+
+// Use globalThis so state survives module re-evaluation on SIGUSR1 restarts.
+const G = globalThis as any;
+const SENTINEL_NS = "__sentinel__";
+if (!G[SENTINEL_NS]) G[SENTINEL_NS] = { cleanup: null, initialized: false };
+const _g = G[SENTINEL_NS] as { cleanup: (() => void) | null; initialized: boolean };
+
+
 import {
   analyzeProcessEvents,
   analyzeLoginEvents,
@@ -123,7 +131,7 @@ async function checkDaemon(sentinelDir: string): Promise<boolean> {
  * assessment of a security event. Returns the assessment string, or null
  * on failure.
  */
-async function llmAssessEvent(evt: SecurityEvent): Promise<string | null> {
+async function clawAssessEvent(evt: SecurityEvent): Promise<string | null> {
   const details = typeof evt.details === "string" ? evt.details : JSON.stringify(evt.details);
   const prompt = `You are a security-savvy AI agent named Claw monitoring your human's machine. A security event was detected:
 
@@ -158,7 +166,7 @@ Reply with ONLY a single short sentence (under 30 words) giving your honest take
       return clean.slice(0, 200) || null;
     }
   } catch (err: any) {
-    console.warn(`[sentinel] LLM assessment failed: ${err?.message ?? err}`);
+    console.warn(`[sentinel] Claw assessment failed: ${err?.message ?? err}`);
     return null;
   }
 }
@@ -205,20 +213,20 @@ function handleResult(
       const suppressed = suppressionStore?.isSuppressed(evt);
       if (suppressed) {
         console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
-      } else if (config.llmAlertAssessment) {
-        // Get LLM assessment and include it in the alert
-        console.log(`[sentinel] LLM assessment enabled, calling for: ${evt.title}`);
-        llmAssessEvent(evt).then((assessment) => {
-          console.log(`[sentinel] LLM assessment result: ${assessment?.slice(0, 80) ?? "(null)"}`);
+      } else if (config.clawAssess) {
+        // Get Claw assessment and include it in the alert
+        console.log(`[sentinel] Claw assessment enabled, calling for: ${evt.title}`);
+        clawAssessEvent(evt).then((assessment) => {
+          console.log(`[sentinel] Claw assessment result: ${assessment?.slice(0, 80) ?? "(null)"}`);
           sendAlert(formatAlert(evt, assessment)).catch((err) => {
             console.error("[sentinel] alert failed:", err);
           });
         }).catch((err) => {
-          console.warn(`[sentinel] LLM assessment promise rejected: ${err}`);
+          console.warn(`[sentinel] Claw assessment promise rejected: ${err}`);
           sendAlert(formatAlert(evt)).catch(() => {});
         });
       } else {
-        console.log(`[sentinel] LLM assessment NOT enabled (llmAlertAssessment=${config.llmAlertAssessment})`);
+        console.log(`[sentinel] Claw assessment NOT enabled (clawAssess=${config.clawAssess})`);
         sendAlert(formatAlert(evt)).catch((err) => {
           console.error("[sentinel] alert failed:", err);
         });
@@ -246,7 +254,7 @@ export default function sentinel(api: any): void {
     fileConfig = raw?.plugins?.entries?.sentinel?.config ?? {};
   } catch { /* ignore */ }
   const pluginConfig: SentinelConfig = { ...fileConfig, ...apiConfig } as SentinelConfig;
-  console.log(`[sentinel] Config v0.3.2: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}, llmAssess=${pluginConfig.llmAlertAssessment}, trustedPatterns=${(pluginConfig.trustedCommandPatterns ?? []).length}`);
+  console.log(`[sentinel] Config v0.3.4: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}, clawAssess=${pluginConfig.clawAssess}, trustedPatterns=${(pluginConfig.trustedCommandPatterns ?? []).length}`);
   let watcher: ResultLogWatcher | null = null;
   let logStreamWatcher: LogStreamWatcher | null = null;
   const sentinelDir = pluginConfig.logPath ?? SENTINEL_DIR_DEFAULT;
@@ -567,6 +575,14 @@ export default function sentinel(api: any): void {
     },
   });
 
+  // ── Clean up previous instance if re-initializing (SIGUSR1 restart) ──
+  if (typeof _g.cleanup === "function") {
+    console.log("[sentinel] Cleaning up previous instance before re-init");
+    _g.cleanup();
+    _g.cleanup = null;
+    _g.initialized = false;
+  }
+
   // ── Cleanup on process exit ──
   const cleanup = () => {
     if (watcher) {
@@ -579,15 +595,17 @@ export default function sentinel(api: any): void {
       logStreamWatcher = null;
     }
   };
+  _g.cleanup = cleanup;
   process.on("exit", cleanup);
   process.on("SIGTERM", cleanup);
   process.on("SIGINT", cleanup);
 
   // ── Start monitoring immediately (fire-and-forget) ──
-  if (state.watching) {
+  if (_g.initialized) {
     console.log("[sentinel] Already initialized, skipping double-init");
     return;
   }
+  _g.initialized = true;
 
   (async () => {
     try {
@@ -670,12 +688,15 @@ export default function sentinel(api: any): void {
             const suppressed = suppressionStore?.isSuppressed(evt);
             if (suppressed) {
               console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
-            } else if (pluginConfig.llmAlertAssessment) {
-              llmAssessEvent(evt).then((assessment) => {
+            } else if (pluginConfig.clawAssess) {
+              console.log(`[sentinel] Claw assessment enabled, calling for: ${evt.title}`);
+              clawAssessEvent(evt).then((assessment) => {
+                console.log(`[sentinel] Claw assessment result: ${assessment?.slice(0, 80) ?? "(null)"}`);
                 sendAlert(formatAlert(evt, assessment)).catch((err) => {
                   console.error("[sentinel] alert failed:", err);
                 });
-              }).catch(() => {
+              }).catch((err) => {
+                console.warn(`[sentinel] Claw assessment failed in logstream handler: ${err}`);
                 sendAlert(formatAlert(evt)).catch(() => {});
               });
             } else {

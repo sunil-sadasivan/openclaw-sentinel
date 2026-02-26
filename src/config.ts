@@ -22,8 +22,8 @@ export interface SentinelConfig {
   trustedPaths?: string[];
   trustedCommandPatterns?: string[];
   watchPaths?: string[];
-  /** Add a one-line LLM assessment to alerts before sending (requires openclaw CLI) */
-  llmAlertAssessment?: boolean;
+  /** Add a one-line Claw assessment to alerts before sending (requires openclaw CLI) */
+  clawAssess?: boolean;
 }
 
 export const DEFAULT_CONFIG: Required<
