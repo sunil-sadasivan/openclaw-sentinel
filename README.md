@@ -17,16 +17,32 @@ Sentinel watches your machine for suspicious activity and alerts you in real-tim
 ## Architecture
 
 ```
-osqueryd (root daemon)
-    ↓ writes JSON results
-~/.openclaw/sentinel/logs/osquery/osqueryd.results.log
-    ↓ tailed by
-Sentinel watcher (fs.watch + poll fallback)
-    ↓ parsed results
-Analyzer (detection rules)
-    ↓ high/critical events
-OpenClaw → Signal/Slack/Telegram alert
+┌─────────────────────────┐    ┌──────────────────────┐
+│  Log Stream Watchers    │    │  osqueryd (root)      │
+│  • system.log tail      │    │  • process events     │
+│  • log stream (auth,    │    │  • port monitoring    │
+│    screen sharing,      │    │  • crontab changes    │
+│    user accounts)       │    │  • file integrity     │
+└──────────┬──────────────┘    └──────────┬───────────┘
+           │ logEvent()                    │ logEvent()
+           ▼                               ▼
+    ┌─────────────────────────────────────────┐
+    │         events.jsonl (audit log)        │
+    └──────────────────┬──────────────────────┘
+                       │ fs.watch (tailed by)
+                       ▼
+              ┌─────────────────┐
+              │   AlertTailer   │
+              │  • threshold    │
+              │  • dedup        │
+              │  • suppression  │
+              │  • clawAssess 🦞│
+              └────────┬────────┘
+                       ▼
+              OpenClaw → Signal/Slack/Telegram
 ```
+
+Detection is **decoupled** from alerting. Watchers only parse and persist events. The AlertTailer handles all alert logic by tailing `events.jsonl`, making the pipeline crash-resilient and replayable.
 
 Sentinel **does not** run osqueryd itself (it requires root). You start osqueryd separately via `sudo` or `launchd`, and Sentinel tails its result logs.
 
@@ -84,7 +100,8 @@ Then add the plugin to your `~/.openclaw/openclaw.json`:
         "config": {
           "alertChannel": "signal",
           "alertTo": "+1234567890",
-          "alertSeverity": "high"
+          "alertSeverity": "high",
+          "clawAssess": true
         }
       }
     }
@@ -123,7 +140,8 @@ Add to your `~/.openclaw/openclaw.json` under `plugins.entries`:
           "logPath": "~/.openclaw/sentinel",
           "alertChannel": "signal",
           "alertTo": "+1234567890",
-          "alertSeverity": "high"
+          "alertSeverity": "high",
+          "clawAssess": true
         }
       }
     }
@@ -140,6 +158,7 @@ Add to your `~/.openclaw/openclaw.json` under `plugins.entries`:
 | `alertChannel` | string | — | Channel for alerts (`signal`, `slack`, `telegram`, etc.) |
 | `alertTo` | string | — | Alert target (phone number, channel ID, etc.) |
 | `alertSeverity` | string | `high` | Minimum severity to alert: `critical`, `high`, `medium`, `low`, `info` |
+| `clawAssess` | boolean | `false` | Enable 🦞 Claw assessment — each alert gets a one-line LLM analysis via your OpenClaw agent, providing context on whether the event is benign or genuinely suspicious |
 | `trustedSigningIds` | string[] | `[]` | Code signing IDs to skip (e.g. `com.apple`) |
 | `trustedPaths` | string[] | `[]` | Binary paths to skip (e.g. `/usr/bin`, `/opt/homebrew/bin`) |
 | `watchPaths` | string[] | `[]` | File paths to monitor for integrity changes |
@@ -325,6 +344,23 @@ User: www → root | PID: 54321
 Command: sudo /bin/bash
 ```
 
+### Claw Assessment (`clawAssess`)
+
+When enabled, every alert gets a 🦞 one-liner from your OpenClaw agent providing context:
+
+```
+🔴 SENTINEL: SSH failed authentication
+Severity: HIGH | ssh_login
+Host: sunils-mac-mini.lan | 8:04:44 AM
+
+Failed authentication (PAM) for "sunil" from 100.107.214.121
+
+🦞 Same Tailscale IP, same single PAM failure — this is getting noisy;
+   suppress this alert pattern unless it clusters into a burst.
+```
+
+The assessment helps you quickly triage alerts without investigating each one manually. It uses your agent's full context — knowledge of your infrastructure, Tailscale IPs, expected services, and recent activity.
+
 ## Development
 
 ```bash
@@ -333,18 +369,23 @@ cd openclaw-sentinel
 npm install
 npm run build          # Compile TypeScript
 npm run dev            # Watch mode
-npm test               # Run tests (60 tests)
+npm test               # Run tests (104 tests)
 ```
 
 ## Project structure
 
 ```
 src/
-├── index.ts       # Plugin entry point — tool registration, watcher startup
-├── config.ts      # SentinelConfig interface, defaults, SecurityEvent types
-├── osquery.ts     # osquery binary discovery, SQL execution, config generation
-├── analyzer.ts    # Detection rules — processes, SSH, ports, files, persistence
-└── watcher.ts     # Event-driven log tailer (fs.watch + poll fallback)
+├── index.ts         # Plugin entry point — tool registration, watcher startup
+├── alert-tailer.ts  # AlertTailer — tails events.jsonl, handles all alert logic
+├── config.ts        # SentinelConfig interface, defaults, SecurityEvent types
+├── osquery.ts       # osquery binary discovery, SQL execution, config generation
+├── analyzer.ts      # Detection rules — processes, SSH, ports, files, persistence
+├── alerts.ts        # Rate limiting, deduplication, severity thresholds
+├── log-stream.ts    # Real-time log stream watchers (SSH, sudo, screen sharing)
+├── watcher.ts       # osquery result log tailer (fs.watch + poll fallback)
+├── persistence.ts   # Event persistence (events.jsonl)
+└── suppressions.ts  # Alert suppression rules (title, category, field, exact)
 ```
 
 ## License
