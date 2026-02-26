@@ -5,10 +5,11 @@
  * Uses event-driven log tailing for sub-second alerting.
  *
  * Architecture:
- *   osqueryd (daemon, managed externally via launchd) → writes results to JSON log
- *   Sentinel watcher  → tails log file via fs.watch + poll fallback
- *   Analyzer          → evaluates results against detection rules
- *   OpenClaw messaging → alerts on configured channel
+ *   Watchers (log stream + osquery) → events.jsonl → AlertTailer → assess → deliver
+ *
+ *   Detection is decoupled from alerting — watchers only parse and persist,
+ *   while AlertTailer handles rate limiting, dedup, suppression, Claw assessment,
+ *   and delivery by tailing events.jsonl.
  *
  * Note: osqueryd requires root/sudo — it must be started separately
  * (e.g., via launchd). This plugin only watches the result logs.
@@ -22,6 +23,7 @@ import { Type } from "@sinclair/typebox";
 import type { SentinelConfig, SecurityEvent } from "./config.js";
 import { findOsquery, query } from "./osquery.js";
 import { shouldAlert, meetsThreshold, createAlertState } from "./alerts.js";
+import { AlertTailer } from "./alert-tailer.js";
 import { EventStore } from "./persistence.js";
 import { ResultLogWatcher } from "./watcher.js";
 import type { OsqueryResultBatch } from "./watcher.js";
@@ -208,30 +210,7 @@ function handleResult(
 
   for (const evt of events) {
     logEvent(evt);
-
-    if (meetsThreshold(evt.severity, config.alertSeverity) && shouldAlert(evt, alertRateState)) {
-      const suppressed = suppressionStore?.isSuppressed(evt);
-      if (suppressed) {
-        console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
-      } else if (config.clawAssess) {
-        // Get Claw assessment and include it in the alert
-        console.log(`[sentinel] Claw assessment enabled, calling for: ${evt.title}`);
-        clawAssessEvent(evt).then((assessment) => {
-          console.log(`[sentinel] Claw assessment result: ${assessment?.slice(0, 80) ?? "(null)"}`);
-          sendAlert(formatAlert(evt, assessment)).catch((err) => {
-            console.error("[sentinel] alert failed:", err);
-          });
-        }).catch((err) => {
-          console.warn(`[sentinel] Claw assessment promise rejected: ${err}`);
-          sendAlert(formatAlert(evt)).catch(() => {});
-        });
-      } else {
-        console.log(`[sentinel] Claw assessment NOT enabled (clawAssess=${config.clawAssess})`);
-        sendAlert(formatAlert(evt)).catch((err) => {
-          console.error("[sentinel] alert failed:", err);
-        });
-      }
-    }
+    // AlertTailer handles alerting by tailing events.jsonl
   }
 
   if (events.length > 0) {
@@ -254,9 +233,10 @@ export default function sentinel(api: any): void {
     fileConfig = raw?.plugins?.entries?.sentinel?.config ?? {};
   } catch { /* ignore */ }
   const pluginConfig: SentinelConfig = { ...fileConfig, ...apiConfig } as SentinelConfig;
-  console.log(`[sentinel] Config v0.3.4: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}, clawAssess=${pluginConfig.clawAssess}, trustedPatterns=${(pluginConfig.trustedCommandPatterns ?? []).length}`);
+  console.log(`[sentinel] Config v2026.2.26-1: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}, clawAssess=${pluginConfig.clawAssess}, trustedPatterns=${(pluginConfig.trustedCommandPatterns ?? []).length}`);
   let watcher: ResultLogWatcher | null = null;
   let logStreamWatcher: LogStreamWatcher | null = null;
+  let alertTailer: AlertTailer | null = null;
   const sentinelDir = pluginConfig.logPath ?? SENTINEL_DIR_DEFAULT;
 
   const sendAlert = async (text: string): Promise<void> => {
@@ -585,6 +565,10 @@ export default function sentinel(api: any): void {
 
   // ── Cleanup on process exit ──
   const cleanup = () => {
+    if (alertTailer) {
+      alertTailer.stop();
+      alertTailer = null;
+    }
     if (watcher) {
       watcher.stop();
       watcher = null;
@@ -681,30 +665,7 @@ export default function sentinel(api: any): void {
       logStreamWatcher = new LogStreamWatcher(
         (evt) => {
           logEvent(evt);
-          if (
-            meetsThreshold(evt.severity, pluginConfig.alertSeverity) &&
-            shouldAlert(evt, alertRateState)
-          ) {
-            const suppressed = suppressionStore?.isSuppressed(evt);
-            if (suppressed) {
-              console.log(`[sentinel] Alert suppressed by rule "${suppressed.reason}" (${SuppressionStore.describe(suppressed)})`);
-            } else if (pluginConfig.clawAssess) {
-              console.log(`[sentinel] Claw assessment enabled, calling for: ${evt.title}`);
-              clawAssessEvent(evt).then((assessment) => {
-                console.log(`[sentinel] Claw assessment result: ${assessment?.slice(0, 80) ?? "(null)"}`);
-                sendAlert(formatAlert(evt, assessment)).catch((err) => {
-                  console.error("[sentinel] alert failed:", err);
-                });
-              }).catch((err) => {
-                console.warn(`[sentinel] Claw assessment failed in logstream handler: ${err}`);
-                sendAlert(formatAlert(evt)).catch(() => {});
-              });
-            } else {
-              sendAlert(formatAlert(evt)).catch((err) => {
-                console.error("[sentinel] alert failed:", err);
-              });
-            }
-          }
+          // AlertTailer handles alerting by tailing events.jsonl
           console.log(
             `[sentinel] [real-time] ${evt.severity}/${evt.category}: ${evt.title}`,
           );
@@ -712,6 +673,17 @@ export default function sentinel(api: any): void {
         state.knownHosts,
       );
       logStreamWatcher.start();
+
+      // Start AlertTailer — single pipeline for all alerting
+      const eventsPath = join(sentinelDir, "events.jsonl");
+      alertTailer = new AlertTailer({
+        eventsPath,
+        config: pluginConfig,
+        suppressionStore,
+        sendAlert,
+        clawAssessEvent,
+      });
+      await alertTailer.start();
     } catch (err) {
       console.error("[sentinel] Failed to start:", err);
     }
