@@ -42,8 +42,6 @@ Sentinel watches your machine for suspicious activity and alerts you in real-tim
               OpenClaw → Signal/Slack/Telegram
 ```
 
-Detection is **decoupled** from alerting. Watchers only parse and persist events. The AlertTailer handles all alert logic by tailing `events.jsonl`, making the pipeline crash-resilient and replayable.
-
 Sentinel **does not** run osqueryd itself (it requires root). You start osqueryd separately via `sudo` or `launchd`, and Sentinel tails its result logs.
 
 ## Prerequisites
