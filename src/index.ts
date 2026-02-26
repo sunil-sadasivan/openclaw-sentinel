@@ -246,7 +246,7 @@ export default function sentinel(api: any): void {
     fileConfig = raw?.plugins?.entries?.sentinel?.config ?? {};
   } catch { /* ignore */ }
   const pluginConfig: SentinelConfig = { ...fileConfig, ...apiConfig } as SentinelConfig;
-  console.log(`[sentinel] Config v0.3.0: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}, llmAssess=${pluginConfig.llmAlertAssessment}, trustedPatterns=${(pluginConfig.trustedCommandPatterns ?? []).length}`);
+  console.log(`[sentinel] Config v0.3.2: alertSeverity=${pluginConfig.alertSeverity}, alertChannel=${pluginConfig.alertChannel}, llmAssess=${pluginConfig.llmAlertAssessment}, trustedPatterns=${(pluginConfig.trustedCommandPatterns ?? []).length}`);
   let watcher: ResultLogWatcher | null = null;
   let logStreamWatcher: LogStreamWatcher | null = null;
   const sentinelDir = pluginConfig.logPath ?? SENTINEL_DIR_DEFAULT;
