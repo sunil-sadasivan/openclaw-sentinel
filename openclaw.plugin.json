@@ -2,7 +2,7 @@
   "id": "sentinel",
   "name": "Sentinel",
   "description": "Real-time endpoint security monitoring for macOS and Linux — process execution, SSH connections, privilege escalation, and file integrity alerts via OpenClaw.",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "skills": ["skills/sentinel"],
   "configSchema": {
     "type": "object",
