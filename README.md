@@ -351,9 +351,9 @@ When enabled, every alert gets a 🦞 one-liner from your OpenClaw agent providi
 ```
 🔴 SENTINEL: SSH failed authentication
 Severity: HIGH | ssh_login
-Host: sunils-mac-mini.lan | 8:04:44 AM
+Host: my-hostname.local | 8:04:44 AM
 
-Failed authentication (PAM) for "sunil" from 100.107.214.121
+Failed authentication (PAM) for "alice" from 100.107.214.121
 
 🦞 Same Tailscale IP, same single PAM failure — this is getting noisy;
    suppress this alert pattern unless it clusters into a burst.
