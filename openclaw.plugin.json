@@ -2,8 +2,10 @@
   "id": "sentinel",
   "name": "Sentinel",
   "description": "Real-time endpoint security monitoring for macOS and Linux — process execution, SSH connections, privilege escalation, and file integrity alerts via OpenClaw.",
-  "version": "2026.2.26-1",
-  "skills": ["skills/sentinel"],
+  "version": "2026.2.27",
+  "skills": [
+    "skills/sentinel"
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -26,7 +28,13 @@
       },
       "alertSeverity": {
         "type": "string",
-        "enum": ["critical", "high", "medium", "low", "info"],
+        "enum": [
+          "critical",
+          "high",
+          "medium",
+          "low",
+          "info"
+        ],
         "description": "Minimum severity level to trigger alerts (default: high)"
       },
       "logPath": {
@@ -53,27 +61,35 @@
       },
       "trustedSigningIds": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Signing IDs to trust (skip alerts for these)"
       },
       "trustedPaths": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Process paths to trust (skip alerts for these)"
       },
       "trustedCommandPatterns": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "Regex patterns for commands to skip (e.g. OpenClaw heartbeat scripts)"
       },
       "watchPaths": {
         "type": "array",
-        "items": { "type": "string" },
+        "items": {
+          "type": "string"
+        },
         "description": "File paths to monitor for integrity changes"
       },
-      "clawAssess": {
+      "llmAlertAssessment": {
         "type": "boolean",
-        "description": "Use Claw to assess suspicious commands before alerting (reduces false positives from automation)"
+        "description": "Use LLM to assess suspicious commands before alerting (reduces false positives from automation)"
       }
     }
   },
