@@ -87,9 +87,9 @@
         },
         "description": "File paths to monitor for integrity changes"
       },
-      "llmAlertAssessment": {
+      "clawAssess": {
         "type": "boolean",
-        "description": "Use LLM to assess suspicious commands before alerting (reduces false positives from automation)"
+        "description": "Use Claw to assess suspicious commands before alerting (reduces false positives from automation)"
       }
     }
   },
