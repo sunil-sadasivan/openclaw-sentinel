@@ -1,5 +1,9 @@
 # 🛡️ OpenClaw Sentinel
 
+<p align="center">
+  <img src="docs/sentinel-alerts-screenshot.png" alt="Sentinel real-time alerts via Signal" width="500">
+</p>
+
 OpenClaw agents run with elevated privileges on your machine — shell access, file operations, network connections. Sentinel continuously monitors for unauthorized access, suspicious processes, privilege escalation, and system anomalies, alerting you in real-time through any OpenClaw channel.
 
 A security monitoring plugin for [OpenClaw](https://github.com/openclaw/openclaw), powered by [osquery](https://github.com/osquery/osquery).
