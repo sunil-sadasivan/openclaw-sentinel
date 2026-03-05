@@ -1,5 +1,11 @@
 # 🛡️ OpenClaw Sentinel
 
+[![npm version](https://img.shields.io/npm/v/openclaw-sentinel.svg)](https://www.npmjs.com/package/openclaw-sentinel)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D18-brightgreen.svg)](https://nodejs.org)
+[![OpenClaw Plugin](https://img.shields.io/badge/OpenClaw-plugin-blue.svg)](https://github.com/openclaw/openclaw)
+[![Powered by osquery](https://img.shields.io/badge/powered%20by-osquery-00125F.svg)](https://github.com/osquery/osquery)
+
 <p align="center">
   <img src="docs/sentinel-alerts-screenshot.png" alt="Sentinel real-time alerts via Signal" width="500">
 </p>
