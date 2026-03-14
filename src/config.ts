@@ -57,6 +57,9 @@ export const DEFAULT_CONFIG: Required<
     "/sbin/",
     "/System/",
     "/Library/Apple/",
+    // Rust toolchain — cargo, rustc, build scripts, proc macros
+    "/.rustup/",
+    "/.cargo/",
   ],
   watchPaths: [
     "/etc/hosts",

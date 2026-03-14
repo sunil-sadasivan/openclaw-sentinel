@@ -5,8 +5,11 @@
 import type { SecurityEvent, Severity } from "./config.js";
 import { SEVERITY_ORDER } from "./config.js";
 
-const MAX_ALERTS_PER_MINUTE = 10;
-const ALERT_DEDUP_WINDOW_MS = 15 * 60 * 1000; // 15 minutes (was 1 minute — way too short for noisy events)
+const MAX_ALERTS_PER_MINUTE = 2;
+const MAX_ALERTS_PER_HOUR = 10;
+const ALERT_DEDUP_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+const STARTUP_COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes — ignore backlog burst on plugin start
+const startupTime = Date.now();
 
 export interface AlertRecord {
   time: number;
@@ -51,16 +54,26 @@ export function shouldAlert(
   alertState: AlertState,
   now: number = Date.now(),
 ): boolean {
+  // Startup cooldown — ignore backlog burst
+  if (now - startupTime < STARTUP_COOLDOWN_MS) {
+    return false;
+  }
+
   // Clean entries older than the dedup window
   alertState.recentAlerts = alertState.recentAlerts.filter(
     (a) => now - a.time < ALERT_DEDUP_WINDOW_MS,
   );
 
-  // Rate limit: max alerts per minute (count only last 60s)
+  // Rate limit: max alerts per minute
   const recentCount = alertState.recentAlerts.filter(
     (a) => now - a.time < 60_000,
   ).length;
   if (recentCount >= MAX_ALERTS_PER_MINUTE) {
+    return false;
+  }
+
+  // Hard cap: max alerts per hour
+  if (alertState.recentAlerts.length >= MAX_ALERTS_PER_HOUR) {
     return false;
   }
 
