@@ -335,8 +335,11 @@ export function formatAlert(evt: SecurityEvent, assessment?: string | null): str
   const emoji = severityEmoji[evt.severity];
   const time = new Date(evt.timestamp).toLocaleTimeString();
 
+  const dedupeCount = (evt as any)._dedupeCount ?? 1;
+  const countSuffix = dedupeCount > 1 ? ` (×${dedupeCount})` : "";
+
   const lines = [
-    `${emoji} **SENTINEL: ${evt.title}**`,
+    `${emoji} **SENTINEL: ${evt.title}${countSuffix}**`,
     `Severity: ${evt.severity.toUpperCase()} | ${evt.category}`,
     `Host: ${evt.hostname} | ${time}`,
     "",

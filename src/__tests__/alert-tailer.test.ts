@@ -175,8 +175,8 @@ describe("AlertTailer", () => {
     await new Promise((r) => setTimeout(r, 200));
 
     appendFileSync(EVENTS_PATH, JSON.stringify(makeEvent()) + "\n");
-    // Wait for batch window (10s) + processing time
-    await new Promise((r) => setTimeout(r, 11_000));
+    // Wait for batch window (30s) + processing time
+    await new Promise((r) => setTimeout(r, 31_000));
 
     assert.ok(alerts.length > 0, "Should alert after batch window flushes");
     assert.ok(alerts[0].includes("benign agent command"), "Should include Claw assessment");
@@ -197,8 +197,8 @@ describe("AlertTailer", () => {
     await new Promise((r) => setTimeout(r, 200));
 
     appendFileSync(EVENTS_PATH, JSON.stringify(makeEvent()) + "\n");
-    // Wait for batch window (10s) + processing time
-    await new Promise((r) => setTimeout(r, 11_000));
+    // Wait for batch window (30s) + processing time
+    await new Promise((r) => setTimeout(r, 31_000));
 
     assert.ok(alerts.length > 0, "Should still alert even if Claw assessment fails");
     tailer.stop();

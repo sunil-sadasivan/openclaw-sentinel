@@ -27,9 +27,9 @@ export interface AlertTailerOptions {
 }
 
 /** How long to wait for more events before flushing a batch assessment */
-const BATCH_WINDOW_MS = 10_000; // 10 seconds
+const BATCH_WINDOW_MS = 30_000; // 30 seconds — wider window to consolidate more
 /** Max events to accumulate before forcing a flush */
-const BATCH_MAX_SIZE = 20;
+const BATCH_MAX_SIZE = 50;
 
 export class AlertTailer {
   private eventsPath: string;
@@ -184,8 +184,14 @@ export class AlertTailer {
       return;
     }
 
-    // If clawAssess is enabled, queue into batch instead of calling per-event
-    if (this.config.clawAssess) {
+    // Skip clawAssess for low-severity events that are already identified as
+    // likely benign (e.g., agent-spawned commands). These don't need an LLM
+    // assessment — just send the alert directly. This prevents bursts of bash
+    // commands from spawning dozens of subagents.
+    const skipAssess = evt.severity === "low" || evt.severity === "info"
+      || (evt.details as any)?.likelyAgent === true;
+
+    if (this.config.clawAssess && !skipAssess) {
       this.queueForBatchAssessment(evt);
     } else {
       await this.sendAlert(formatAlert(evt)).catch((err: any) => {
@@ -198,8 +204,22 @@ export class AlertTailer {
    * Queue an event for batched Claw assessment.
    * Waits up to BATCH_WINDOW_MS for more events, then sends
    * a single assessment request for the entire batch.
+   * 
+   * Events with the same title are deduplicated within the batch window —
+   * only the first occurrence is kept, with a count of how many were seen.
+   * This prevents N identical "Suspicious command detected" events from
+   * each spawning their own subagent assessment.
    */
   private queueForBatchAssessment(evt: SecurityEvent): void {
+    // Deduplicate: if we already have a pending event with the same title,
+    // just increment the count instead of adding another
+    const existing = this.pendingAssessments.find(e => e.title === evt.title);
+    if (existing) {
+      (existing as any)._dedupeCount = ((existing as any)._dedupeCount ?? 1) + 1;
+      console.log(`[sentinel] Deduped batch assessment: ${evt.title} (×${(existing as any)._dedupeCount})`);
+      return;
+    }
+
     this.pendingAssessments.push(evt);
     console.log(`[sentinel] Queued for batch assessment: ${evt.title} (${this.pendingAssessments.length} pending)`);
 
@@ -274,7 +294,9 @@ export class AlertTailer {
   private mergeBatchForAssessment(evts: SecurityEvent[]): SecurityEvent {
     const summaries = evts.map((e, i) => {
       const details = typeof e.details === "string" ? e.details : JSON.stringify(e.details);
-      return `[${i + 1}] ${e.severity}/${e.category}: ${e.title} — ${e.description} (${details})`;
+      const count = (e as any)._dedupeCount ?? 1;
+      const countSuffix = count > 1 ? ` (×${count})` : "";
+      return `[${i + 1}] ${e.severity}/${e.category}: ${e.title}${countSuffix} — ${e.description} (${details})`;
     });
     return {
       id: evts[0].id,
