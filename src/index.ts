@@ -132,6 +132,10 @@ async function checkDaemon(sentinelDir: string): Promise<boolean> {
  * Use the LLM (via openclaw CLI) to generate a one-line human-readable
  * assessment of a security event. Returns the assessment string, or null
  * on failure.
+ *
+ * IMPORTANT: Uses --isolated flag so each assessment is a one-shot ephemeral
+ * session, NOT injected into the main agent's conversation context.
+ * This prevents alert storms from bloating the main session.
  */
 async function clawAssessEvent(evt: SecurityEvent): Promise<string | null> {
   const details = typeof evt.details === "string" ? evt.details : JSON.stringify(evt.details);
@@ -148,7 +152,9 @@ Context: This machine runs OpenClaw (an AI assistant platform) which frequently 
 Reply with ONLY a single short sentence (under 30 words) giving your honest take on whether this is a real problem or likely benign. Be direct, opinionated, and useful — like a senior engineer glancing at an alert. No preamble.`;
 
   try {
-    const { stdout } = await execFileAsync("openclaw", ["agent", "--agent", "main", "--message", prompt, "--json"], {
+    // Use --isolated to avoid polluting the main agent session with alert assessments.
+    // Each assessment is a one-shot ephemeral call, no conversation history needed.
+    const { stdout } = await execFileAsync("openclaw", ["agent", "--agent", "main", "--isolated", "--message", prompt, "--json"], {
       timeout: 30_000,
     });
     // Parse JSON response — openclaw agent --json returns { result: { payloads: [{ text: "..." }] } }

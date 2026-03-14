@@ -31,11 +31,14 @@ describe("shouldAlert", () => {
     assert.equal(shouldAlert(makeEvent("Same Event"), state, now + 59_000), false);
   });
 
-  it("allows same title after 1 minute window", () => {
+  it("allows same title after 15 minute dedup window", () => {
     const state = createAlertState();
     const now = Date.now();
     shouldAlert(makeEvent("Recurring"), state, now);
-    assert.equal(shouldAlert(makeEvent("Recurring"), state, now + 61_000), true);
+    // Still deduped at 1 minute (window is 15 minutes now)
+    assert.equal(shouldAlert(makeEvent("Recurring"), state, now + 61_000), false);
+    // Allowed after 15 minutes
+    assert.equal(shouldAlert(makeEvent("Recurring"), state, now + 15 * 60_000 + 1000), true);
   });
 
   it("allows different titles", () => {

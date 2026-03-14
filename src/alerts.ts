@@ -6,11 +6,11 @@ import type { SecurityEvent, Severity } from "./config.js";
 import { SEVERITY_ORDER } from "./config.js";
 
 const MAX_ALERTS_PER_MINUTE = 10;
-const ALERT_DEDUP_WINDOW_MS = 60 * 1000; // 1 minute
+const ALERT_DEDUP_WINDOW_MS = 15 * 60 * 1000; // 15 minutes (was 1 minute — way too short for noisy events)
 
 export interface AlertRecord {
   time: number;
-  title: string;
+  key: string; // dedup key: title + distinguishing detail (path, port, etc.)
 }
 
 export interface AlertState {
@@ -22,6 +22,28 @@ export function createAlertState(): AlertState {
 }
 
 /**
+ * Build a dedup key from a security event.
+ * Includes title + distinguishing details (path, port, user) so that
+ * different instances of the same alert type are deduped separately,
+ * but the same instance isn't repeated every minute.
+ */
+export function dedupKey(evt: SecurityEvent): string {
+  const details =
+    typeof evt.details === "object" && evt.details !== null
+      ? evt.details
+      : {};
+  // Pick the most distinguishing field for each category
+  const distinguisher =
+    (details as any).path ??
+    (details as any).port ??
+    (details as any).address ??
+    (details as any).host ??
+    (details as any).username ??
+    "";
+  return `${evt.title}::${distinguisher}`;
+}
+
+/**
  * Check if an alert should be sent (rate limit + dedup).
  */
 export function shouldAlert(
@@ -29,7 +51,7 @@ export function shouldAlert(
   alertState: AlertState,
   now: number = Date.now(),
 ): boolean {
-  // Clean entries older than the dedup window (1 min)
+  // Clean entries older than the dedup window
   alertState.recentAlerts = alertState.recentAlerts.filter(
     (a) => now - a.time < ALERT_DEDUP_WINDOW_MS,
   );
@@ -42,20 +64,22 @@ export function shouldAlert(
     return false;
   }
 
+  const key = dedupKey(evt);
+
   // Skip dedup for failed auth — every attempt matters
   const skipDedup =
     evt.category === "ssh_login" &&
     (evt.title.includes("failed") || evt.title.includes("Failed") || evt.title.includes("invalid") || evt.title.includes("Invalid"));
 
   if (!skipDedup) {
-    // Dedup: same title within window
+    // Dedup: same key (title + distinguishing detail) within 15-minute window
     const isDupe = alertState.recentAlerts.some(
-      (a) => a.title === evt.title && now - a.time < ALERT_DEDUP_WINDOW_MS,
+      (a) => a.key === key && now - a.time < ALERT_DEDUP_WINDOW_MS,
     );
     if (isDupe) return false;
   }
 
-  alertState.recentAlerts.push({ time: now, title: evt.title });
+  alertState.recentAlerts.push({ time: now, key });
   return true;
 }
 

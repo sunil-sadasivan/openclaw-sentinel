@@ -23,7 +23,13 @@ export interface AlertTailerOptions {
   suppressionStore: SuppressionStore | null;
   sendAlert: (text: string) => Promise<void>;
   clawAssessEvent: (evt: SecurityEvent) => Promise<string | null>;
+  clawAssessBatch?: (evts: SecurityEvent[]) => Promise<Map<string, string | null>>;
 }
+
+/** How long to wait for more events before flushing a batch assessment */
+const BATCH_WINDOW_MS = 10_000; // 10 seconds
+/** Max events to accumulate before forcing a flush */
+const BATCH_MAX_SIZE = 20;
 
 export class AlertTailer {
   private eventsPath: string;
@@ -31,6 +37,7 @@ export class AlertTailer {
   private suppressionStore: SuppressionStore | null;
   private sendAlert: (text: string) => Promise<void>;
   private clawAssessEvent: (evt: SecurityEvent) => Promise<string | null>;
+  private clawAssessBatch?: (evts: SecurityEvent[]) => Promise<Map<string, string | null>>;
   private alertState: AlertState;
   private fileOffset: number = 0;
   private watcher: FSWatcher | null = null;
@@ -38,12 +45,17 @@ export class AlertTailer {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
 
+  // Batch assessment queue
+  private pendingAssessments: SecurityEvent[] = [];
+  private batchFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
   constructor(opts: AlertTailerOptions) {
     this.eventsPath = opts.eventsPath;
     this.config = opts.config;
     this.suppressionStore = opts.suppressionStore;
     this.sendAlert = opts.sendAlert;
     this.clawAssessEvent = opts.clawAssessEvent;
+    this.clawAssessBatch = opts.clawAssessBatch;
     this.alertState = createAlertState();
   }
 
@@ -94,9 +106,20 @@ export class AlertTailer {
       clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
+    if (this.batchFlushTimer) {
+      clearTimeout(this.batchFlushTimer);
+      this.batchFlushTimer = null;
+    }
     if (this.pollInterval) {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
+    }
+    // Flush any remaining pending assessments without Claw assessment
+    if (this.pendingAssessments.length > 0) {
+      const remaining = this.pendingAssessments.splice(0);
+      for (const evt of remaining) {
+        this.sendAlert(formatAlert(evt)).catch(() => {});
+      }
     }
     console.log("[sentinel] AlertTailer stopped");
   }
@@ -161,22 +184,111 @@ export class AlertTailer {
       return;
     }
 
-    // Claw assessment
+    // If clawAssess is enabled, queue into batch instead of calling per-event
     if (this.config.clawAssess) {
-      console.log(`[sentinel] Claw assessment enabled, calling for: ${evt.title}`);
-      try {
-        const assessment = await this.clawAssessEvent(evt);
-        console.log(`[sentinel] Claw assessment result: ${assessment?.slice(0, 80) ?? "(null)"}`);
-        await this.sendAlert(formatAlert(evt, assessment));
-      } catch (err: any) {
-        console.warn(`[sentinel] Claw assessment failed: ${err.message ?? err}`);
-        await this.sendAlert(formatAlert(evt)).catch(() => {});
-      }
+      this.queueForBatchAssessment(evt);
     } else {
       await this.sendAlert(formatAlert(evt)).catch((err: any) => {
         console.error(`[sentinel] Alert delivery failed: ${err.message ?? err}`);
       });
     }
+  }
+
+  /**
+   * Queue an event for batched Claw assessment.
+   * Waits up to BATCH_WINDOW_MS for more events, then sends
+   * a single assessment request for the entire batch.
+   */
+  private queueForBatchAssessment(evt: SecurityEvent): void {
+    this.pendingAssessments.push(evt);
+    console.log(`[sentinel] Queued for batch assessment: ${evt.title} (${this.pendingAssessments.length} pending)`);
+
+    // Force flush if batch is full
+    if (this.pendingAssessments.length >= BATCH_MAX_SIZE) {
+      if (this.batchFlushTimer) {
+        clearTimeout(this.batchFlushTimer);
+        this.batchFlushTimer = null;
+      }
+      this.flushBatchAssessment().catch((err) => {
+        console.error(`[sentinel] Batch assessment flush error: ${err.message}`);
+      });
+      return;
+    }
+
+    // Otherwise reset the debounce timer
+    if (this.batchFlushTimer) clearTimeout(this.batchFlushTimer);
+    this.batchFlushTimer = setTimeout(() => {
+      this.batchFlushTimer = null;
+      this.flushBatchAssessment().catch((err) => {
+        console.error(`[sentinel] Batch assessment flush error: ${err.message}`);
+      });
+    }, BATCH_WINDOW_MS);
+  }
+
+  /**
+   * Flush all pending events as a single batched Claw assessment.
+   * One agent call for N events instead of N agent calls.
+   */
+  private async flushBatchAssessment(): Promise<void> {
+    if (this.pendingAssessments.length === 0) return;
+
+    const batch = this.pendingAssessments.splice(0);
+    console.log(`[sentinel] Flushing batch assessment for ${batch.length} event(s)`);
+
+    // If we have a batch assessor, use it (single LLM call for all events)
+    if (this.clawAssessBatch) {
+      try {
+        const assessments = await this.clawAssessBatch(batch);
+        for (const evt of batch) {
+          const assessment = assessments.get(evt.id) ?? null;
+          await this.sendAlert(formatAlert(evt, assessment));
+        }
+        return;
+      } catch (err: any) {
+        console.warn(`[sentinel] Batch assessment failed, falling back to single: ${err.message ?? err}`);
+      }
+    }
+
+    // Fallback: single assessment call for all events combined
+    try {
+      const assessment = await this.clawAssessEvent(
+        batch.length === 1 ? batch[0] : this.mergeBatchForAssessment(batch),
+      );
+      // Apply the same assessment to all events in the batch
+      for (const evt of batch) {
+        await this.sendAlert(formatAlert(evt, assessment));
+      }
+    } catch (err: any) {
+      console.warn(`[sentinel] Claw assessment failed: ${err.message ?? err}`);
+      // Send without assessment
+      for (const evt of batch) {
+        await this.sendAlert(formatAlert(evt)).catch(() => {});
+      }
+    }
+  }
+
+  /**
+   * Merge multiple events into a single synthetic event for assessment.
+   * This lets us send one prompt to the LLM covering all events.
+   */
+  private mergeBatchForAssessment(evts: SecurityEvent[]): SecurityEvent {
+    const summaries = evts.map((e, i) => {
+      const details = typeof e.details === "string" ? e.details : JSON.stringify(e.details);
+      return `[${i + 1}] ${e.severity}/${e.category}: ${e.title} — ${e.description} (${details})`;
+    });
+    return {
+      id: evts[0].id,
+      timestamp: evts[0].timestamp,
+      severity: evts.reduce((max, e) => {
+        const order = ["info", "low", "medium", "high", "critical"];
+        return order.indexOf(e.severity) > order.indexOf(max) ? e.severity : max;
+      }, evts[0].severity),
+      category: evts[0].category,
+      title: `${evts.length} security events detected`,
+      description: summaries.join("\n"),
+      details: { eventCount: evts.length, events: evts.map(e => ({ title: e.title, severity: e.severity, category: e.category })) },
+      hostname: evts[0].hostname,
+    };
   }
 
   /** Update config at runtime (e.g., after reload) */

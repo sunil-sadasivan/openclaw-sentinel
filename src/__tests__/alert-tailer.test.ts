@@ -161,7 +161,7 @@ describe("AlertTailer", () => {
     tailer.stop();
   });
 
-  it("includes Claw assessment when enabled", async () => {
+  it("includes Claw assessment when enabled (batched)", async () => {
     const alerts: string[] = [];
     const tailer = new AlertTailer({
       eventsPath: EVENTS_PATH,
@@ -175,14 +175,15 @@ describe("AlertTailer", () => {
     await new Promise((r) => setTimeout(r, 200));
 
     appendFileSync(EVENTS_PATH, JSON.stringify(makeEvent()) + "\n");
-    await new Promise((r) => setTimeout(r, 500));
+    // Wait for batch window (10s) + processing time
+    await new Promise((r) => setTimeout(r, 11_000));
 
-    assert.ok(alerts.length > 0);
+    assert.ok(alerts.length > 0, "Should alert after batch window flushes");
     assert.ok(alerts[0].includes("benign agent command"), "Should include Claw assessment");
     tailer.stop();
   });
 
-  it("still alerts when Claw assessment fails", async () => {
+  it("still alerts when Claw assessment fails (batched)", async () => {
     const alerts: string[] = [];
     const tailer = new AlertTailer({
       eventsPath: EVENTS_PATH,
@@ -196,7 +197,8 @@ describe("AlertTailer", () => {
     await new Promise((r) => setTimeout(r, 200));
 
     appendFileSync(EVENTS_PATH, JSON.stringify(makeEvent()) + "\n");
-    await new Promise((r) => setTimeout(r, 500));
+    // Wait for batch window (10s) + processing time
+    await new Promise((r) => setTimeout(r, 11_000));
 
     assert.ok(alerts.length > 0, "Should still alert even if Claw assessment fails");
     tailer.stop();
